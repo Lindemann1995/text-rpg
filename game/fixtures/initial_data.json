@@ -1,0 +1,837 @@
+[
+{
+  "model": "game.characterclass",
+  "pk": 2,
+  "fields": {
+    "name": "Лучник",
+    "description": "Мастер дальнего боя. Быстрый, точный, смертоносный. Оружие — лук и стрелы.",
+    "icon": "archer",
+    "base_strength": 8,
+    "base_agility": 15,
+    "base_intelligence": 10,
+    "base_endurance": 9,
+    "base_sanity": 10
+  }
+},
+{
+  "model": "game.characterclass",
+  "pk": 3,
+  "fields": {
+    "name": "Жнец Смерти",
+    "description": "Тот, кто видит смерть. Тёмная магия, жатва душ. Смерть — его ремесло.",
+    "icon": "reaper",
+    "base_strength": 9,
+    "base_agility": 10,
+    "base_intelligence": 14,
+    "base_endurance": 8,
+    "base_sanity": 13
+  }
+},
+{
+  "model": "game.characterclass",
+  "pk": 4,
+  "fields": {
+    "name": "Тёмный Маг",
+    "description": "Повелитель запретных знаний. Хрупок телом, но опасен разумом.",
+    "icon": "dark_mage",
+    "base_strength": 6,
+    "base_agility": 9,
+    "base_intelligence": 16,
+    "base_endurance": 7,
+    "base_sanity": 12
+  }
+},
+{
+  "model": "game.characterclass",
+  "pk": 5,
+  "fields": {
+    "name": "Варвар",
+    "description": "Ярость древних. Не знает страха, не знает пощады. Живёт в бою.",
+    "icon": "barbarian",
+    "base_strength": 16,
+    "base_agility": 9,
+    "base_intelligence": 6,
+    "base_endurance": 14,
+    "base_sanity": 7
+  }
+},
+{
+  "model": "game.characterclass",
+  "pk": 6,
+  "fields": {
+    "name": "Воин",
+    "description": "Щит ордена. Надёжный, стойкий, дисциплинированный. Спина, за которой не страшно.",
+    "icon": "warrior",
+    "base_strength": 13,
+    "base_agility": 10,
+    "base_intelligence": 8,
+    "base_endurance": 15,
+    "base_sanity": 10
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 1,
+  "fields": {
+    "title": "Пробуждение",
+    "slug": "start_temple",
+    "text": "Ты не помнишь, как здесь оказался. Холодный камень под спиной. Запах гари и старой крови. Свечи догорают, отбрасывая дрожащие тени на стены разрушенного храма. Где-то капает вода. Ты чувствуешь, что что-то смотрит на тебя из темноты.",
+    "location": "Мир Древних",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": true,
+    "created_at": "2026-10-15T17:07:28.989Z",
+    "updated_at": "2026-10-15T17:21:58.344Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 2,
+  "fields": {
+    "title": "Алтарь",
+    "slug": "altar",
+    "text": "Ты видишь алтарь из чёрного камня. На нём лежит осколок — кристалл, пульсирующий багровым светом. От него исходит тепло, но не то, что греет. То, что жжёт изнутри. Голос в голове шепчет: «Возьми меня».",
+    "location": "Мир Древних",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:14:16.343Z",
+    "updated_at": "2026-10-15T17:27:26.272Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 3,
+  "fields": {
+    "title": "Первый враг",
+    "slug": "first_enemy",
+    "text": "Из тени выходит скелет в ржавых доспехах. В пустых глазницах горят багровые огни. Он поднимает зазубренный меч. Ты чувствуешь, как что-то отзывается в груди — то ли страх, то ли древний инстинкт. Бой неизбежен.",
+    "location": "Мир Древних",
+    "scene_type": "combat",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:26:34.336Z",
+    "updated_at": "2026-10-15T17:29:29.351Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 4,
+  "fields": {
+    "title": "Мёртвый лес",
+    "slug": "dead_forest",
+    "text": "Ты выбираешься из храма. Небо цвета запёкшейся крови. Мёртвые деревья тянут ветви, как пальцы утопленников. Ветер шепчет твоё имя. Вдалеке — огни деревни. Между тобой и деревней — лес.",
+    "location": "Мир Древних",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:29:06.119Z",
+    "updated_at": "2026-10-15T17:31:26.116Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 5,
+  "fields": {
+    "title": "Деревня Кайроса",
+    "slug": "kairos_village",
+    "text": "Деревня — это десяток покосившихся домов, окружённых частоколом. У ворот стоит старик в лохмотьях. Его глаза — белые, как у слепого. «Я ждал тебя, — говорит он. — Ты — последний. Осколок привёл тебя сюда».",
+    "location": "Деревня Кайроса",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:31:07.640Z",
+    "updated_at": "2026-10-15T17:32:51.272Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 6,
+  "fields": {
+    "title": "Первый квест",
+    "slug": "first_quest",
+    "text": "«В склепе под деревней лежит артефакт — Сердце Дракона. Без него ты не сможешь противостоять Тени. Но склеп проклят. Многие ушли — никто не вернулся. Ты готов?»",
+    "location": "Деревня Кайроса",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:32:35.334Z",
+    "updated_at": "2026-10-15T17:34:16.166Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 7,
+  "fields": {
+    "title": "Склеп — вход",
+    "slug": "crypt_entrance",
+    "text": "Каменная лестница уходит вниз. Воздух холодный и влажный. На стенах — барельефы богов. У одного из них отрублена голова. Из темноты слышно дыхание.",
+    "location": "Склеп Сердце Дракона",
+    "scene_type": "dungeon",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:34:02.538Z",
+    "updated_at": "2026-10-15T17:36:31.371Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 8,
+  "fields": {
+    "title": "Пленный культист",
+    "slug": "captive_cultist",
+    "text": "В углу камеры — человек в багровых одеждах. Он прикован к стене. Лицо измождённое, но глаза горят фанатичным огнём. «Освободи меня, — шепчет он. — Я знаю, где Сердце. Без меня ты умрёшь здесь».",
+    "location": "Склеп Сердце Дракона",
+    "scene_type": "dungeon",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:36:14.103Z",
+    "updated_at": "2026-10-15T17:38:03.139Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 9,
+  "fields": {
+    "title": "Скелет-Жрец",
+    "slug": "skeleton_priest",
+    "text": "Зал с высоким потолком. В центре — саркофаг из чёрного камня. На нём сидит скелет в истлевшей мантии, с посохом из костей. «Ты пришёл за Сердцем? — говорит он без рта. — Оно — моё. Я — его хранитель. Я — его пленник».",
+    "location": "Склеп Сердце Дракона",
+    "scene_type": "combat",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:37:47.611Z",
+    "updated_at": "2026-10-15T17:39:21.737Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 10,
+  "fields": {
+    "title": "Возвращение",
+    "slug": "return_to_village",
+    "text": "Ты выходишь из склепа. На руках — кровь. В груди — тяжесть. В небе всё ещё горит багровое зарево. Кайрос ждёт у ворот. «Ты вернулся. Значит, ты — избранный. Теперь ты знаешь правду: боги мертвы, но Тень — жива. И она идёт за тобой».",
+    "location": "Деревня Кайроса",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:39:07.685Z",
+    "updated_at": "2026-10-15T17:43:46.944Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 11,
+  "fields": {
+    "title": "Гильдия",
+    "slug": "guild",
+    "text": "В городе — три гильдии. Орден Света — фанатики, которые хотят сжечь всё тёмное. Культ Тени — те, кто служит Древнему. Свободные — наёмники, которые никому не служат. Каждая предлагает силу. Каждая требует верности.",
+    "location": "Город Гильдий",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:43:14.039Z",
+    "updated_at": "2026-10-15T17:45:06.193Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 12,
+  "fields": {
+    "title": "Первый рейд",
+    "slug": "first_raid",
+    "text": "Тебя зовут в групповое подземелье — Гробница Павшего Бога. Нужно 4 игрока. В группе — незнакомцы. Кто-то может стать другом. Кто-то — предателем. Гробница ждёт.",
+    "location": "Город Гильдий",
+    "scene_type": "dungeon",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:44:53.578Z",
+    "updated_at": "2026-10-15T17:46:24.330Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 13,
+  "fields": {
+    "title": "Предательство",
+    "slug": "betrayal",
+    "text": "В глубине гробницы один из группы исчезает. Потом появляется — но не тот. Тень Древних вселилась в него. Теперь он — враг. Его глаза горят багровым. Он поднимает оружие. Ты должен выбрать: убить друга — или попытаться спасти.",
+    "location": "Гробница Павшего Бога",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:46:10.778Z",
+    "updated_at": "2026-10-15T17:48:10.073Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 14,
+  "fields": {
+    "title": "Тень Древних",
+    "slug": "shadow_ancient",
+    "text": "Ты видишь Её. Тень — это не монстр. Это богиня, которую забыли. Нирна. Она говорит: «Я не зло. Я — то, что осталось, когда всё остальное умерло. Присоединяйся ко мне — или уничтожь меня». Её голос звучит внутри твоей головы.",
+    "location": "Гробница Павшего Бога",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:47:52.379Z",
+    "updated_at": "2026-10-15T17:49:30.597Z"
+  }
+},
+{
+  "model": "game.scene",
+  "pk": 15,
+  "fields": {
+    "title": "Финал завязки",
+    "slug": "tutorial_end",
+    "text": "Ты делаешь выбор. Мир не меняется сразу. Но что-то меняется в тебе. Ты знаешь, что это только начало. Тень Древних не уйдёт. Она будет ждать. А ты — будешь расти. Добро пожаловать в Мир Древних.",
+    "location": "Мир Древних",
+    "scene_type": "story",
+    "is_tutorial": true,
+    "is_start": false,
+    "created_at": "2026-10-15T17:49:16.170Z",
+    "updated_at": "2026-10-15T17:49:16.170Z"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 1,
+  "fields": {
+    "scene": 1,
+    "text": "🗡 Встать",
+    "next_scene": 2,
+    "order": 1,
+    "required_flag": "",
+    "set_flag": "awake"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 2,
+  "fields": {
+    "scene": 1,
+    "text": "👁 Осмотреться",
+    "next_scene": 2,
+    "order": 2,
+    "required_flag": "",
+    "set_flag": "careful"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 3,
+  "fields": {
+    "scene": 1,
+    "text": "😱 Закричать",
+    "next_scene": 2,
+    "order": 3,
+    "required_flag": "",
+    "set_flag": "scared"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 4,
+  "fields": {
+    "scene": 2,
+    "text": "🤲 Взять осколок",
+    "next_scene": 3,
+    "order": 1,
+    "required_flag": "",
+    "set_flag": "has_shard"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 5,
+  "fields": {
+    "scene": 2,
+    "text": "🔨 Разбить его",
+    "next_scene": 3,
+    "order": 2,
+    "required_flag": "",
+    "set_flag": "destroyed_shard"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 6,
+  "fields": {
+    "scene": 2,
+    "text": "🚪 Уйти",
+    "next_scene": 3,
+    "order": 3,
+    "required_flag": "",
+    "set_flag": "ignored_shard"
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 7,
+  "fields": {
+    "scene": 3,
+    "text": "⚔ Атаковать",
+    "next_scene": 4,
+    "order": 1,
+    "required_flag": "attacked",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 8,
+  "fields": {
+    "scene": 3,
+    "text": "🛡 Защищаться",
+    "next_scene": 4,
+    "order": 2,
+    "required_flag": "defended",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 9,
+  "fields": {
+    "scene": 3,
+    "text": "🏃 Бежать",
+    "next_scene": 4,
+    "order": 3,
+    "required_flag": "fled",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 10,
+  "fields": {
+    "scene": 4,
+    "text": "🏘 Идти к деревне",
+    "next_scene": 5,
+    "order": 1,
+    "required_flag": "go_village",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 11,
+  "fields": {
+    "scene": 4,
+    "text": "🌲 Идти в лес",
+    "next_scene": 5,
+    "order": 2,
+    "required_flag": "go_forest",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 12,
+  "fields": {
+    "scene": 4,
+    "text": "🪨 Остаться",
+    "next_scene": 5,
+    "order": 3,
+    "required_flag": "stay_forest",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 13,
+  "fields": {
+    "scene": 5,
+    "text": "🙏 Принять судьбу",
+    "next_scene": 6,
+    "order": 1,
+    "required_flag": "accepted_fate",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 14,
+  "fields": {
+    "scene": 5,
+    "text": "❓ Спросить, кто он",
+    "next_scene": 6,
+    "order": 2,
+    "required_flag": "curious",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 15,
+  "fields": {
+    "scene": 5,
+    "text": "🗡 Угрожать",
+    "next_scene": 6,
+    "order": 3,
+    "required_flag": "aggressive",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 16,
+  "fields": {
+    "scene": 6,
+    "text": "✅ Принять квест",
+    "next_scene": 7,
+    "order": 1,
+    "required_flag": "quest_accepted",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 17,
+  "fields": {
+    "scene": 6,
+    "text": "❌ Отказаться",
+    "next_scene": 7,
+    "order": 2,
+    "required_flag": "quest_refused",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 18,
+  "fields": {
+    "scene": 6,
+    "text": "💰 Торговаться",
+    "next_scene": 7,
+    "order": 3,
+    "required_flag": "quest_haggled",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 19,
+  "fields": {
+    "scene": 7,
+    "text": "🔥 Зажечь факел",
+    "next_scene": 8,
+    "order": 1,
+    "required_flag": "has_light",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 20,
+  "fields": {
+    "scene": 7,
+    "text": "🚶 Идти в темноте",
+    "next_scene": 8,
+    "order": 2,
+    "required_flag": "in_darkness",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 21,
+  "fields": {
+    "scene": 7,
+    "text": "👂 Прислушаться",
+    "next_scene": 8,
+    "order": 3,
+    "required_flag": "heard_whispers",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 22,
+  "fields": {
+    "scene": 8,
+    "text": "🔓 Освободить",
+    "next_scene": 9,
+    "order": 1,
+    "required_flag": "freed_vein",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 23,
+  "fields": {
+    "scene": 8,
+    "text": "🗡 Убить",
+    "next_scene": 9,
+    "order": 2,
+    "required_flag": "killed_vein",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 24,
+  "fields": {
+    "scene": 8,
+    "text": "❓ Допросить",
+    "next_scene": 9,
+    "order": 3,
+    "required_flag": "interrogated_vein",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 25,
+  "fields": {
+    "scene": 9,
+    "text": "⚔ Атаковать Жреца",
+    "next_scene": 10,
+    "order": 1,
+    "required_flag": "priest_attacked",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 26,
+  "fields": {
+    "scene": 9,
+    "text": "🛡 Защищаться",
+    "next_scene": 10,
+    "order": 2,
+    "required_flag": "priest_defended",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 27,
+  "fields": {
+    "scene": 9,
+    "text": "🗣 Говорить с ним",
+    "next_scene": 10,
+    "order": 3,
+    "required_flag": "priest_talked",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 28,
+  "fields": {
+    "scene": 10,
+    "text": "🏘 Остаться в деревне",
+    "next_scene": 11,
+    "order": 1,
+    "required_flag": "stayed_village",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 29,
+  "fields": {
+    "scene": 10,
+    "text": "🏃 Уйти в город",
+    "next_scene": 11,
+    "order": 2,
+    "required_flag": "went_to_city",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 30,
+  "fields": {
+    "scene": 10,
+    "text": "🌑 Идти к Тени",
+    "next_scene": 11,
+    "order": 3,
+    "required_flag": "dark_path_started",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 31,
+  "fields": {
+    "scene": 11,
+    "text": "⚔ Орден Света",
+    "next_scene": 12,
+    "order": 1,
+    "required_flag": "faction_light",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 32,
+  "fields": {
+    "scene": 11,
+    "text": "🌑 Культ Тени",
+    "next_scene": 12,
+    "order": 2,
+    "required_flag": "faction_shadow",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 33,
+  "fields": {
+    "scene": 11,
+    "text": "🗡 Свободные",
+    "next_scene": 12,
+    "order": 3,
+    "required_flag": "faction_free",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 34,
+  "fields": {
+    "scene": 12,
+    "text": "👥 Присоединиться",
+    "next_scene": 13,
+    "order": 1,
+    "required_flag": "joined_raid",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 35,
+  "fields": {
+    "scene": 12,
+    "text": "🚶 Отказаться",
+    "next_scene": 13,
+    "order": 2,
+    "required_flag": "",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 36,
+  "fields": {
+    "scene": 12,
+    "text": "🤝 Собрать свою группу",
+    "next_scene": 13,
+    "order": 3,
+    "required_flag": "own_party",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 37,
+  "fields": {
+    "scene": 13,
+    "text": "🗡 Убить друга",
+    "next_scene": 14,
+    "order": 1,
+    "required_flag": "killed_friend",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 38,
+  "fields": {
+    "scene": 13,
+    "text": "💊 Попытаться спасти",
+    "next_scene": 14,
+    "order": 2,
+    "required_flag": "saved_friend",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 39,
+  "fields": {
+    "scene": 13,
+    "text": "🏃 Бежать",
+    "next_scene": 14,
+    "order": 3,
+    "required_flag": "ran_away",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 40,
+  "fields": {
+    "scene": 14,
+    "text": "🌑 Присоединиться",
+    "next_scene": 15,
+    "order": 1,
+    "required_flag": "joined_nirna",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 41,
+  "fields": {
+    "scene": 14,
+    "text": "⚔ Сражаться",
+    "next_scene": 15,
+    "order": 2,
+    "required_flag": "fought_nirna",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 42,
+  "fields": {
+    "scene": 14,
+    "text": "🕊 Уйти",
+    "next_scene": 15,
+    "order": 3,
+    "required_flag": "left_nirna",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 43,
+  "fields": {
+    "scene": 15,
+    "text": "🎮 Начать приключение",
+    "next_scene": null,
+    "order": 1,
+    "required_flag": "tutorial_complete",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 44,
+  "fields": {
+    "scene": 15,
+    "text": "📖 Вернуться в начало",
+    "next_scene": null,
+    "order": 2,
+    "required_flag": "tutorial_replay",
+    "set_flag": ""
+  }
+},
+{
+  "model": "game.choice",
+  "pk": 45,
+  "fields": {
+    "scene": 15,
+    "text": "❌ Выйти в меню",
+    "next_scene": null,
+    "order": 3,
+    "required_flag": "tutorial_exit",
+    "set_flag": ""
+  }
+}
+]
