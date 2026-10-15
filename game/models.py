@@ -57,7 +57,7 @@ class Player(models.Model):
     experience_to_next = models.IntegerField(default=100, verbose_name='Опыт до след. уровня')
 
     # Статы
-    strenght = models.IntegerField(default=10, verbose_name='Сила')
+    strength = models.IntegerField(default=10, verbose_name='Сила')
     agility = models.IntegerField(default=10, verbose_name='Ловкость')
     intelligence = models.IntegerField(default=10, verbose_name='Интеллект')
     endurance = models.IntegerField(default=10, verbose_name='Выносливость')
@@ -91,6 +91,17 @@ class Player(models.Model):
         ],
         default='none',
         verbose_name='Фракция'
+    )
+
+    # Подтверждение email
+    email_verified = models.BooleanField(
+        default=False,
+        verbose_name='Email подтверждён'
+    )
+    email_verification_token = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name='Токен подтверждения email'
     )
 
     # Обучение.

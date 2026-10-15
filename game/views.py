@@ -1,7 +1,16 @@
 from django.http import JsonResponse
-from .models import Scene
+from django.contrib.auth.models import User
+from django.core.mail import send_mail
+from django.conf import settings
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework_simplejwt.tokens import RefreshToken
+import secrets
 
-
+from .models import Scene, Player, CharacterClass, Choice, Flag
+from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
 def scene_to_dict(scene):
     """Превращает сцену в словарь для JSON"""
     choices_data = []
@@ -41,3 +50,221 @@ def get_scene(request, slug):
         return JsonResponse({'error': f'Сцена "{slug}" не найдена'}, status=404)
     
     return JsonResponse(scene_to_dict(scene), json_dumps_params={'ensure_ascii': False})
+
+def get_tokens_for_user(user):
+    """Генерирует JWT-токены для пользователя"""
+    refresh = RefreshToken.for_user(user)
+    return {
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    }
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register(request):
+    """Регистрация нового игрока"""
+    serializer = RegisterSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = serializer.save()
+    
+    # Генерируем токен для подтверждения email
+    token = secrets.token_urlsafe(32)
+    player = user.player
+    player.email_verification_token = token
+    player.save()
+    
+    # "Отправляем" письмо (в консоль)
+    verification_url = f'https://dev.api.code-nest.ru/api/auth/verify-email/{token}/'
+    send_mail(
+        subject='Подтверждение email — Тень Древних',
+        message=f'Привет, {user.username}!\n\nПодтверди email: {verification_url}',
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+    
+    tokens = get_tokens_for_user(user)
+    
+    return Response({
+        'message': 'Игрок создан. Проверь консоль сервера для подтверждения email.',
+        'user': {
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+        },
+        'tokens': tokens,
+        'email_verified': False,
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def verify_email(request, token):
+    """Подтверждение email по токену"""
+    try:
+        player = Player.objects.get(email_verification_token=token)
+    except Player.DoesNotExist:
+        return Response({
+            'error': 'Неверный или устаревший токен'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    player.email_verified = True
+    player.email_verification_token = ''
+    player.save()
+    
+    return Response({
+        'message': 'Email успешно подтверждён!',
+        'username': player.user.username,
+    })
+
+
+@api_view(['GET'])
+def me(request):
+    """Профиль текущего игрока"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({
+            'error': 'Профиль игрока не найден'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    serializer = PlayerSerializer(player)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_classes(request):
+    """Список всех классов персонажей"""
+    classes = CharacterClass.objects.all()
+    serializer = CharacterClassSerializer(classes, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['POST'])
+def choose_class(request):
+    """Выбор класса персонажа"""
+    class_id = request.data.get('class_id')
+    
+    if not class_id:
+        return Response({
+            'error': 'Не указан class_id'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        character_class = CharacterClass.objects.get(id=class_id)
+    except CharacterClass.DoesNotExist:
+        return Response({
+            'error': 'Класс не найден'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({
+            'error': 'Профиль игрока не найден'
+        }, status=status.HTTP_404_NOT_FOUND)
+    
+    # Устанавливаем класс
+    player.character_class = character_class
+    
+    # Применяем базовые статы класса
+    player.strength = character_class.base_strength
+    player.agility = character_class.base_agility
+    player.intelligence = character_class.base_intelligence
+    player.endurance = character_class.base_endurance
+    player.sanity = character_class.base_sanity
+    
+    player.save()
+    
+    serializer = PlayerSerializer(player)
+    return Response({
+        'message': f'Класс "{character_class.name}" выбран!',
+        'player': serializer.data,
+    })
+
+
+@api_view(['GET'])
+def current_scene(request):
+    """Текущая сцена игрока"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль игрока не найден'}, status=404)
+    
+    # Если игрок ещё не начинал — ставим стартовую сцену
+    if not player.current_scene:
+        start = Scene.objects.filter(is_start=True).first()
+        if not start:
+            return Response({'error': 'Стартовая сцена не найдена'}, status=404)
+        player.current_scene = start
+        player.save()
+    
+    serializer_data = scene_to_dict(player.current_scene)
+    
+    # Добавляем информацию об игроке
+    serializer_data['player'] = {
+        'username': player.user.username,
+        'level': player.level,
+        'gold': player.gold,
+        'health': player.health,
+        'max_health': player.max_health,
+        'mana': player.mana,
+        'max_mana': player.max_mana,
+        'character_class': player.character_class.name if player.character_class else None,
+    }
+    
+    return Response(serializer_data)
+
+
+@api_view(['POST'])
+def choose_in_scene(request):
+    """Сделать выбор в текущей сцене"""
+    choice_id = request.data.get('choice_id')
+    
+    if not choice_id:
+        return Response({'error': 'Не указан choice_id'}, status=400)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль игрока не найден'}, status=404)
+    
+    if not player.current_scene:
+        return Response({'error': 'Игрок не находится в сцене'}, status=400)
+    
+    # Ищем выбор среди выборов текущей сцены
+    try:
+        choice = Choice.objects.get(id=choice_id, scene=player.current_scene)
+    except Choice.DoesNotExist:
+        return Response({'error': 'Такого выбора нет в текущей сцене'}, status=404)
+    
+    # Сохраняем флаг, если есть
+    if choice.set_flag:
+        Flag.objects.update_or_create(
+            player=player,
+            name=choice.set_flag,
+            defaults={'value': '1'},
+        )
+    
+    # Переходим к следующей сцене
+    if choice.next_scene:
+        player.current_scene = choice.next_scene
+        player.save()
+        
+        return Response({
+            'message': f'Выбор сделан: {choice.text}',
+            'set_flag': choice.set_flag or None,
+            'next_scene': scene_to_dict(choice.next_scene),
+        })
+    else:
+        return Response({
+            'message': f'Выбор сделан: {choice.text}',
+            'set_flag': choice.set_flag or None,
+            'next_scene': None,
+            'is_end': True,
+        })
