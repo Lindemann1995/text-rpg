@@ -10,6 +10,11 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
+CSRF_TRUSTED_ORIGINS = [
+    'https://dev.api.code-nest.ru',
+    'https://api.code-nest.ru',
+]
+
 INSTALLED_APPS = [
     'daphne',
     'django.contrib.admin',
