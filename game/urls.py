@@ -35,4 +35,14 @@ urlpatterns = [
     path('player/use-potion/', views.use_potion, name='use_potion'),
     path('player/potions/', views.get_potions, name='get_potions'),
     path('shop/buy-potion/', views.buy_potion, name='buy_potion'),
+    # Торговцы
+    path('location/<slug:location_slug>/traders/', views.traders_list, name='traders_list'),
+    path('trader/<slug:slug>/', views.trader_detail, name='trader_detail'),
+    path('trader/<slug:slug>/buy/', views.trader_buy, name='trader_buy'),
+    
+    # Инвентарь и экипировка
+    path('player/inventory/', views.player_inventory, name='player_inventory'),
+    path('player/equipment/', views.player_equipment, name='player_equipment'),
+    path('player/equip/', views.player_equip, name='player_equip'),
+    path('player/unequip/', views.player_unequip, name='player_unequip'),
 ]

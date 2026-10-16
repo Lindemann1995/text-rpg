@@ -341,13 +341,11 @@ class Item(models.Model):
     # В модель Item добавь:
 
     # Для экипировки
-    required_class = models.ForeignKey(
+    required_classes = models.ManyToManyField(
         CharacterClass,
-        on_delete=models.SET_NULL,
-        null=True,
         blank=True,
-        related_name='equipment',
-        verbose_name='Требуемый класс',
+        related_name='equipment_items',
+        verbose_name='Требуемые классы',
         help_text='Пусто = любой класс'
     )
     required_level = models.IntegerField(
@@ -372,6 +370,8 @@ class Item(models.Model):
     bonus_intelligence = models.IntegerField(default=0, verbose_name='+ Интеллект')
     bonus_endurance = models.IntegerField(default=0, verbose_name='+ Выносливость')
     bonus_sanity = models.IntegerField(default=0, verbose_name='+ Рассудок')
+    bonus_health = models.IntegerField(default=0, verbose_name='+ Здоровье (HP)')
+    bonus_mana = models.IntegerField(default=0, verbose_name='+ Мана (MP)')
     
     class Meta:
         verbose_name = 'Предмет'
@@ -404,7 +404,7 @@ class Inventory(models.Model):
         verbose_name='Экипирован',
         help_text='Только для оружия и брони'
     )
-        is_equipped = models.BooleanField(
+    is_equipped = models.BooleanField(
         default=False,
         verbose_name='Экипирован'
     )

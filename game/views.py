@@ -11,7 +11,8 @@ import secrets
 from .combat import start_combat, player_attack, player_defend, player_flee
 from .models import (
     Scene, Player, CharacterClass, Choice, Flag,
-    Location, Enemy, Combat, Item, Inventory
+    Location, Enemy, Combat, Item, Inventory,
+    Trader, EquipmentSlot,
 )
 from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
 
@@ -586,3 +587,268 @@ def buy_potion(request):
         'player_gold': player.gold,
         'quantity': inv.quantity,
     })
+
+@api_view(['GET'])
+def traders_list(request, location_slug):
+    """Список торговцев в локации"""
+    try:
+        location = Location.objects.get(slug=location_slug)
+    except Location.DoesNotExist:
+        return Response({'error': 'Локация не найдена'}, status=404)
+    
+    traders = location.traders.filter(is_active=True)
+    
+    return Response({
+        'location': location.name,
+        'traders': [
+            {
+                'id': t.id,
+                'slug': t.slug,
+                'name': t.name,
+                'description': t.description,
+                'icon': t.icon,
+                'items_count': t.items.count(),
+            }
+            for t in traders
+        ]
+    })
+
+
+@api_view(['GET'])
+def trader_detail(request, slug):
+    """Товары конкретного торговца"""
+    try:
+        trader = Trader.objects.get(slug=slug, is_active=True)
+    except Trader.DoesNotExist:
+        return Response({'error': 'Торговец не найден'}, status=404)
+    
+    items = []
+    for item in trader.items.all():
+        items.append({
+            'id': item.id,
+            'slug': item.slug,
+            'name': item.name,
+            'description': item.description,
+            'icon': item.icon,
+            'item_type': item.item_type,
+            'rarity': item.rarity,
+            'price': item.price,
+            'bonus_strength': item.bonus_strength,
+            'bonus_agility': item.bonus_agility,
+            'bonus_intelligence': item.bonus_intelligence,
+            'bonus_endurance': item.bonus_endurance,
+            'bonus_sanity': item.bonus_sanity,
+            'bonus_health': item.bonus_health,
+            'bonus_mana': item.bonus_mana,
+            'equip_slot': item.equip_slot,
+            'required_level': item.required_level,
+            'required_classes': [c.name for c in item.required_classes.all()],
+        })
+    
+    return Response({
+        'trader': {
+            'slug': trader.slug,
+            'name': trader.name,
+            'description': trader.description,
+            'icon': trader.icon,
+        },
+        'items': items,
+    })
+
+
+@api_view(['POST'])
+def trader_buy(request, slug):
+    """Купить предмет у торговца"""
+    item_slug = request.data.get('item_slug')
+    
+    if not item_slug:
+        return Response({'error': 'Не указан item_slug'}, status=400)
+    
+    try:
+        trader = Trader.objects.get(slug=slug, is_active=True)
+    except Trader.DoesNotExist:
+        return Response({'error': 'Торговец не найден'}, status=404)
+    
+    try:
+        item = trader.items.get(slug=item_slug)
+    except Item.DoesNotExist:
+        return Response({'error': 'Товар не найден у этого торговца'}, status=404)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    if player.gold < item.price:
+        return Response({
+            'error': f'Нужно {item.price} золота (у тебя {player.gold})'
+        }, status=400)
+    
+    # Списываем золото
+    player.gold -= item.price
+    player.save()
+    
+    # Добавляем в инвентарь
+    inv, created = Inventory.objects.get_or_create(
+        player=player,
+        item=item,
+        defaults={'quantity': 0}
+    )
+    inv.quantity += 1
+    inv.save()
+    
+    return Response({
+        'message': f'Куплено: {item.name}',
+        'player_gold': player.gold,
+        'quantity': inv.quantity,
+    })
+
+
+@api_view(['GET'])
+def player_inventory(request):
+    """Инвентарь игрока"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    inv_items = Inventory.objects.filter(
+        player=player
+    ).select_related('item')
+    
+    result = []
+    for inv in inv_items:
+        item = inv.item
+        result.append({
+            'item_id': item.id,
+            'slug': item.slug,
+            'name': item.name,
+            'icon': item.icon,
+            'item_type': item.item_type,
+            'rarity': item.rarity,
+            'quantity': inv.quantity,
+            'is_equipped': inv.is_equipped,
+            'equip_slot': item.equip_slot,
+            'required_level': item.required_level,
+            'required_classes': [c.name for c in item.required_classes.all()],
+            'bonus_strength': item.bonus_strength,
+            'bonus_agility': item.bonus_agility,
+            'bonus_intelligence': item.bonus_intelligence,
+            'bonus_endurance': item.bonus_endurance,
+            'bonus_sanity': item.bonus_sanity,
+            'bonus_health': item.bonus_health,
+            'bonus_mana': item.bonus_mana,
+        })
+    
+    return Response({'items': result})
+
+
+@api_view(['POST'])
+def player_equip(request):
+    """Надеть предмет"""
+    item_slug = request.data.get('item_slug')
+    
+    if not item_slug:
+        return Response({'error': 'Не указан item_slug'}, status=400)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    try:
+        item = Item.objects.get(slug=item_slug)
+    except Item.DoesNotExist:
+        return Response({'error': 'Предмет не найден'}, status=404)
+    
+    # Проверка: предмет в инвентаре?
+    try:
+        inv = Inventory.objects.get(player=player, item=item)
+    except Inventory.DoesNotExist:
+        return Response({'error': 'У тебя нет этого предмета'}, status=400)
+    
+    # Проверка слота
+    if not item.equip_slot:
+        return Response({'error': 'Этот предмет нельзя надеть'}, status=400)
+    
+    # Проверка уровня
+    if player.level < item.required_level:
+        return Response({
+            'error': f'Нужен уровень {item.required_level}'
+        }, status=400)
+    
+    # Проверка класса
+    allowed_classes = item.required_classes.all()
+    if allowed_classes.exists():
+        if not player.character_class:
+            return Response({'error': 'Сначала выбери класс'}, status=400)
+        if player.character_class not in allowed_classes:
+            return Response({
+                'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'
+            }, status=400)
+    
+    # Снимаем текущий предмет из этого слота
+    EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
+    
+    # Снимаем старую экипировку (сбрасываем is_equipped)
+    Inventory.objects.filter(player=player, item__equip_slot=item.equip_slot).update(is_equipped=False)
+    
+    # Надеваем новый
+    EquipmentSlot.objects.create(
+        player=player,
+        slot=item.equip_slot,
+        item=item,
+    )
+    inv.is_equipped = True
+    inv.save()
+    
+    return Response({
+        'message': f'Надето: {item.name}',
+        'slot': item.equip_slot,
+    })
+
+
+@api_view(['POST'])
+def player_unequip(request):
+    """Снять предмет"""
+    slot = request.data.get('slot')
+    
+    if not slot:
+        return Response({'error': 'Не указан slot'}, status=400)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    eq = EquipmentSlot.objects.filter(player=player, slot=slot).first()
+    if not eq:
+        return Response({'error': 'В этом слоте ничего нет'}, status=400)
+    
+    if eq.item:
+        Inventory.objects.filter(player=player, item=eq.item).update(is_equipped=False)
+    
+    eq.delete()
+    
+    return Response({'message': 'Снято'})
+
+
+@api_view(['GET'])
+def player_equipment(request):
+    """Что надето на игроке"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    slots = EquipmentSlot.objects.filter(player=player).select_related('item')
+    
+    result = {}
+    for eq in slots:
+        result[eq.slot] = {
+            'slug': eq.item.slug if eq.item else None,
+            'name': eq.item.name if eq.item else None,
+            'icon': eq.item.icon if eq.item else None,
+        }
+    
+    return Response({'equipment': result})

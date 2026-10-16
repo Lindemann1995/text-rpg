@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
-    Location, Enemy, Combat,
+    Location, Enemy, Combat, Trader, EquipmentSlot,
 )
 
 
@@ -48,10 +48,25 @@ class FlagAdmin(admin.ModelAdmin):
 
 @admin.register(Item)
 class ItemAdmin(admin.ModelAdmin):
-    list_display = ['name', 'item_type', 'rarity', 'price']
-    list_filter = ['item_type', 'rarity']
-    search_fields = ['name']
+    list_display = ['name', 'item_type', 'rarity', 'price', 'required_level', 'equip_slot']
+    list_filter = ['item_type', 'rarity', 'equip_slot', 'required_classes']
+    search_fields = ['name', 'slug']
     prepopulated_fields = {'slug': ('name',)}
+    fieldsets = (
+        ('Основное', {
+            'fields': ('name', 'slug', 'description', 'icon', 'item_type', 'rarity', 'price')
+        }),
+        ('Бонусы к статам', {
+            'fields': ('bonus_strength', 'bonus_agility', 'bonus_intelligence', 'bonus_endurance', 'bonus_sanity', 'bonus_health', 'bonus_mana')
+        }),
+        ('Эффект (для зелий)', {
+            'fields': ('effect_type', 'effect_value')
+        }),
+        ('Экипировка', {
+            'fields': ('equip_slot', 'required_classes', 'required_level'),
+            'classes': ('collapse',),
+        }),
+    )
 
 
 @admin.register(Inventory)
@@ -82,3 +97,18 @@ class CombatAdmin(admin.ModelAdmin):
     list_display = ['player', 'enemy', 'status', 'turn', 'created_at']
     list_filter = ['status', 'enemy']
     search_fields = ['player__user__username', 'enemy__name']
+
+@admin.register(Trader)
+class TraderAdmin(admin.ModelAdmin):
+    list_display = ['name', 'location', 'is_active']
+    list_filter = ['location', 'is_active']
+    search_fields = ['name', 'slug']
+    prepopulated_fields = {'slug': ('name',)}
+    filter_horizontal = ['items']
+
+
+@admin.register(EquipmentSlot)
+class EquipmentSlotAdmin(admin.ModelAdmin):
+    list_display = ['player', 'slot', 'item', 'equipped_at']
+    list_filter = ['slot']
+    search_fields = ['player__user__username', 'item__name']
