@@ -17,7 +17,9 @@ urlpatterns = [
     path('combat/start/', views.combat_start, name='combat_start'),
     path('combat/<int:combat_id>/action/', views.combat_action, name='combat_action'),
     path('combat/<int:combat_id>/', views.combat_state, name='combat_state'),
-    
+    # Локации
+    path('location/<slug:slug>/hunt/', views.location_hunt, name='location_hunt'),
+    path('location/<slug:slug>/boss/', views.location_boss, name='location_boss'),
     # Аутентификация
     path('auth/register/', views.register, name='register'),
     path('auth/verify-email/<str:token>/', views.verify_email, name='verify_email'),
@@ -28,4 +30,9 @@ urlpatterns = [
     path('player/me/', views.me, name='me'),
     path('player/classes/', views.list_classes, name='list_classes'),
     path('player/choose-class/', views.choose_class, name='choose_class'),
+    path('player/rest/', views.player_rest, name='player_rest'),
+    # Зелья
+    path('player/use-potion/', views.use_potion, name='use_potion'),
+    path('player/potions/', views.get_potions, name='get_potions'),
+    path('shop/buy-potion/', views.buy_potion, name='buy_potion'),
 ]

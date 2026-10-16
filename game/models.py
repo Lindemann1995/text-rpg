@@ -295,6 +295,18 @@ class Item(models.Model):
         unique=True,
         verbose_name='Название'
     )
+
+        # Эффект предмета
+    effect_type = models.CharField(
+        max_length=30,
+        blank=True,
+        verbose_name='Тип эффекта',
+        help_text='heal_hp, heal_mp и т.д.'
+    )
+    effect_value = models.IntegerField(
+        default=0,
+        verbose_name='Значение эффекта'
+    )
     slug = models.SlugField(
         max_length=100,
         unique=True,
@@ -326,7 +338,34 @@ class Item(models.Model):
         verbose_name='Цена',
         help_text='В золоте'
     )
-    
+    # В модель Item добавь:
+
+    # Для экипировки
+    required_class = models.ForeignKey(
+        CharacterClass,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='equipment',
+        verbose_name='Требуемый класс',
+        help_text='Пусто = любой класс'
+    )
+    required_level = models.IntegerField(
+        default=1,
+        verbose_name='Требуемый уровень'
+    )
+    equip_slot = models.CharField(
+        max_length=20,
+        blank=True,
+        choices=[
+            ('weapon', 'Оружие'),
+            ('armor', 'Броня'),
+            ('helmet', 'Шлем'),
+            ('ring', 'Кольцо'),
+            ('amulet', 'Амулет'),
+        ],
+        verbose_name='Слот'
+    )
     # Бонусы к статам
     bonus_strength = models.IntegerField(default=0, verbose_name='+ Сила')
     bonus_agility = models.IntegerField(default=0, verbose_name='+ Ловкость')
@@ -364,6 +403,10 @@ class Inventory(models.Model):
         default=False,
         verbose_name='Экипирован',
         help_text='Только для оружия и брони'
+    )
+        is_equipped = models.BooleanField(
+        default=False,
+        verbose_name='Экипирован'
     )
     
     acquired_at = models.DateTimeField(auto_now_add=True, verbose_name='Получен')
@@ -509,3 +552,77 @@ class Combat(models.Model):
     
     def __str__(self):
         return f'{self.player.user.username} vs {self.enemy.name} ({self.status})'
+
+class Trader(models.Model):
+    """Торговец в Мире Торговли"""
+    
+    name = models.CharField(max_length=100, verbose_name='Имя')
+    slug = models.SlugField(unique=True, verbose_name='Slug')
+    description = models.TextField(blank=True, verbose_name='Описание')
+    icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка')
+    
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.CASCADE,
+        related_name='traders',
+        verbose_name='Локация'
+    )
+    
+    # Какие товары продаёт (ссылки на Item)
+    items = models.ManyToManyField(
+        Item,
+        blank=True,
+        related_name='traders',
+        verbose_name='Товары'
+    )
+    
+    # Наценка (1.5 = +50%)
+    markup = models.FloatField(default=1.0, verbose_name='Наценка')
+    
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+    
+    class Meta:
+        verbose_name = 'Торговец'
+        verbose_name_plural = 'Торговцы'
+    
+    def __str__(self):
+        return f'{self.name} ({self.location.name})'
+
+class EquipmentSlot(models.Model):
+    """Экипировка игрока — что надето"""
+    
+    SLOTS = [
+        ('weapon', 'Оружие'),
+        ('armor', 'Броня'),
+        ('helmet', 'Шлем'),
+        ('ring', 'Кольцо'),
+        ('amulet', 'Амулет'),
+    ]
+    
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.CASCADE,
+        related_name='equipment',
+        verbose_name='Игрок'
+    )
+    slot = models.CharField(
+        max_length=20,
+        choices=SLOTS,
+        verbose_name='Слот'
+    )
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='Предмет'
+    )
+    equipped_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Экипировка'
+        verbose_name_plural = 'Экипировка'
+        unique_together = [['player', 'slot']]
+    
+    def __str__(self):
+        return f'{self.player.user.username} — {self.slot}: {self.item.name if self.item else "пусто"}'

@@ -9,10 +9,13 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 import secrets
 from .combat import start_combat, player_attack, player_defend, player_flee
-from .models import Enemy, Combat
-
-from .models import Scene, Player, CharacterClass, Choice, Flag
+from .models import (
+    Scene, Player, CharacterClass, Choice, Flag,
+    Location, Enemy, Combat, Item, Inventory
+)
 from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
+
+
 def scene_to_dict(scene):
     """Превращает сцену в словарь для JSON"""
     choices_data = []
@@ -342,3 +345,244 @@ def combat_state(request, combat_id):
     
     from .combat import _combat_to_dict
     return Response(_combat_to_dict(combat))
+
+@api_view(['POST'])
+def location_hunt(request, slug):
+    """Случайный враг из локации (не босс)"""
+    import random
+    
+    try:
+        location = Location.objects.get(slug=slug)
+    except Location.DoesNotExist:
+        return Response({'error': 'Локация не найдена'}, status=404)
+    
+    # Все обычные враги локации
+    enemies = list(location.enemies.filter(enemy_type='normal'))
+    
+    if not enemies:
+        return Response({'error': 'В этой локации нет врагов'}, status=404)
+    
+    # Случайный враг
+    enemy = random.choice(enemies)
+    
+    return Response({
+        'enemy_slug': enemy.slug,
+        'enemy_name': enemy.name,
+        'enemy_level': enemy.level,
+        'enemy_hp': enemy.health,
+        'enemy_icon': enemy.icon,
+    })
+
+
+@api_view(['POST'])
+def location_boss(request, slug):
+    """Босс локации (проверка уровня)"""
+    try:
+        location = Location.objects.get(slug=slug)
+    except Location.DoesNotExist:
+        return Response({'error': 'Локация не найдена'}, status=404)
+    
+    boss = location.enemies.filter(enemy_type='boss').first()
+    
+    if not boss:
+        return Response({'error': 'В этой локации нет босса'}, status=404)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль игрока не найден'}, status=404)
+    
+    # Босс требует уровень выше min_level локации
+    required_level = location.min_level + 5
+    
+    if player.level < required_level:
+        return Response({
+            'error': f'Для боя с боссом нужен уровень {required_level}+',
+            'player_level': player.level,
+            'required_level': required_level,
+        }, status=403)
+    
+    return Response({
+        'enemy_slug': boss.slug,
+        'enemy_name': boss.name,
+        'enemy_level': boss.level,
+        'enemy_hp': boss.health,
+        'enemy_icon': boss.icon,
+        'is_boss': True,
+    })
+
+@api_view(['POST'])
+def player_rest(request):
+    """Отдых — восстановление HP за золото"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль игрока не найден'}, status=404)
+    
+    # Если HP уже полное
+    if player.health >= player.max_health:
+        return Response({
+            'error': 'У тебя уже полное здоровье',
+            'player_hp': player.health,
+            'player_max_hp': player.max_health,
+        }, status=400)
+    
+    # Стоимость: 10 золота × уровень
+    cost = 10 * player.level
+    
+    if player.gold < cost:
+        return Response({
+            'error': f'Нужно {cost} золота (у тебя {player.gold})',
+            'cost': cost,
+            'player_gold': player.gold,
+        }, status=400)
+    
+    # Списываем золото, восстанавливаем HP
+    player.gold -= cost
+    player.health = player.max_health
+    player.save()
+    
+    return Response({
+        'message': f'Ты отдохнул. Восстановлено {player.max_health} HP.',
+        'cost': cost,
+        'player_hp': player.health,
+        'player_max_hp': player.max_health,
+        'player_gold': player.gold,
+    })
+
+@api_view(['POST'])
+def use_potion(request):
+    """Использовать зелье в бою или вне боя"""
+    potion_slug = request.data.get('potion_slug')
+    
+    if not potion_slug:
+        return Response({'error': 'Не указан potion_slug'}, status=400)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    # Ищем зелье в инвентаре
+    try:
+        item = Item.objects.get(slug=potion_slug, item_type='potion')
+    except Item.DoesNotExist:
+        return Response({'error': 'Зелье не найдено'}, status=404)
+    
+    try:
+        inv = Inventory.objects.get(player=player, item=item)
+    except Inventory.DoesNotExist:
+        return Response({'error': 'У тебя нет этого зелья'}, status=400)
+    
+    if inv.quantity <= 0:
+        return Response({'error': 'Зелья закончились'}, status=400)
+    
+    # Применяем эффект
+    if item.effect_type == 'heal_hp':
+        if player.health >= player.max_health:
+            return Response({'error': 'У тебя полное HP'}, status=400)
+        old_hp = player.health
+        player.health = min(player.max_health, player.health + item.effect_value)
+        healed = player.health - old_hp
+        message = f'Восстановлено {healed} HP'
+    elif item.effect_type == 'heal_mp':
+        if player.mana >= player.max_mana:
+            return Response({'error': 'У тебя полная мана'}, status=400)
+        old_mp = player.mana
+        player.mana = min(player.max_mana, player.mana + item.effect_value)
+        healed = player.mana - old_mp
+        message = f'Восстановлено {healed} MP'
+    else:
+        return Response({'error': 'Неизвестный эффект'}, status=400)
+    
+    # Уменьшаем количество
+    inv.quantity -= 1
+    if inv.quantity <= 0:
+        inv.delete()
+    else:
+        inv.save()
+    
+    player.save()
+    
+    return Response({
+        'message': message,
+        'player_hp': player.health,
+        'player_max_hp': player.max_health,
+        'player_mana': player.mana,
+        'player_max_mana': player.max_mana,
+        'remaining': inv.quantity if inv.id else 0,
+    })
+
+
+@api_view(['GET'])
+def get_potions(request):
+    """Список зелий игрока"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    potions = Inventory.objects.filter(
+        player=player,
+        item__item_type='potion'
+    ).select_related('item')
+    
+    result = []
+    for inv in potions:
+        result.append({
+            'item_id': inv.item.id,
+            'slug': inv.item.slug,
+            'name': inv.item.name,
+            'icon': inv.item.icon,
+            'effect_type': inv.item.effect_type,
+            'effect_value': inv.item.effect_value,
+            'quantity': inv.quantity,
+        })
+    
+    return Response({'potions': result})
+
+
+@api_view(['POST'])
+def buy_potion(request):
+    """Купить зелье у торговца"""
+    potion_slug = request.data.get('potion_slug')
+    
+    if not potion_slug:
+        return Response({'error': 'Не указан potion_slug'}, status=400)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+    
+    try:
+        item = Item.objects.get(slug=potion_slug, item_type='potion')
+    except Item.DoesNotExist:
+        return Response({'error': 'Зелье не найдено'}, status=404)
+    
+    if player.gold < item.price:
+        return Response({
+            'error': f'Нужно {item.price} золота (у тебя {player.gold})',
+        }, status=400)
+    
+    # Проверяем лимит (макс 10 зелий в инвентаре)
+    inv, created = Inventory.objects.get_or_create(
+        player=player,
+        item=item,
+        defaults={'quantity': 0}
+    )
+    
+    if inv.quantity >= 10:
+        return Response({'error': 'Максимум 10 зелий в инвентаре'}, status=400)
+    
+    # Списываем золото, добавляем зелье
+    player.gold -= item.price
+    inv.quantity += 1
+    inv.save()
+    player.save()
+    
+    return Response({
+        'message': f'Куплено: {item.name}',
+        'player_gold': player.gold,
+        'quantity': inv.quantity,
+    })
