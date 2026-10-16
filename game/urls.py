@@ -13,6 +13,10 @@ urlpatterns = [
     path('scene/current/', views.current_scene, name='current_scene'),    # ← ДО slug!
     path('scene/choose/', views.choose_in_scene, name='choose_in_scene'), # ← ДО slug!
     path('scene/<slug:slug>/', views.get_scene, name='get_scene'),        # ← В САМОМ КОНЦЕ
+    # Бой
+    path('combat/start/', views.combat_start, name='combat_start'),
+    path('combat/<int:combat_id>/action/', views.combat_action, name='combat_action'),
+    path('combat/<int:combat_id>/', views.combat_state, name='combat_state'),
     
     # Аутентификация
     path('auth/register/', views.register, name='register'),

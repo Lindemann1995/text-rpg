@@ -1,6 +1,7 @@
 from django.contrib import admin
 from .models import (
-    CharacterClass, Player, Scene, Choice, Flag, Item, Inventory
+    CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
+    Location, Enemy, Combat,
 )
 
 
@@ -58,3 +59,26 @@ class InventoryAdmin(admin.ModelAdmin):
     list_display = ['player', 'item', 'quantity', 'is_equipped']
     list_filter = ['is_equipped', 'item__item_type']
     search_fields = ['player__user__username', 'item__name']
+
+
+@admin.register(Location)
+class LocationAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'min_level', 'is_available']
+    list_filter = ['is_available', 'min_level']
+    search_fields = ['name', 'slug']
+    prepopulated_fields = {'slug': ('name',)}
+
+
+@admin.register(Enemy)
+class EnemyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'level', 'enemy_type', 'location', 'health', 'attack', 'defense']
+    list_filter = ['enemy_type', 'location', 'level']
+    search_fields = ['name', 'slug']
+    prepopulated_fields = {'slug': ('name',)}
+
+
+@admin.register(Combat)
+class CombatAdmin(admin.ModelAdmin):
+    list_display = ['player', 'enemy', 'status', 'turn', 'created_at']
+    list_filter = ['status', 'enemy']
+    search_fields = ['player__user__username', 'enemy__name']

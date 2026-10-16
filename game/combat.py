@@ -1,0 +1,186 @@
+"""
+Логика боевой системы.
+"""
+import random
+from django.utils import timezone
+from .models import Combat, Enemy, Player, Flag
+
+
+def start_combat(player: Player, enemy: Enemy) -> Combat:
+    """Начинает новый бой"""
+    combat = Combat.objects.create(
+        player=player,
+        enemy=enemy,
+        player_hp=player.health,
+        enemy_hp=enemy.health,
+        turn=1,
+        status='active',
+        log=[],
+    )
+    _add_log(combat, 'system', f'⚔️ Бой начался: {player.user.username} vs {enemy.name}')
+    combat.save()
+    return combat
+
+
+def player_attack(combat: Combat) -> dict:
+    """Игрок атакует врага"""
+    if combat.status != 'active':
+        return {'error': 'Бой уже завершён'}
+    
+    player = combat.player
+    enemy = combat.enemy
+    
+    # Базовый урон = атака игрока (сила) минус защита врага
+    base_damage = max(1, player.strength - enemy.defense)
+    
+    # Критический удар — 15% шанс, +50% урона
+    is_crit = random.random() < 0.15
+    damage = int(base_damage * 1.5) if is_crit else base_damage
+    
+    combat.enemy_hp -= damage
+    combat.turn += 1
+    
+    if is_crit:
+        _add_log(combat, 'player', f'💥 КРИТ! Ты нанёс {damage} урона!')
+    else:
+        _add_log(combat, 'player', f'🗡 Ты нанёс {damage} урона.')
+    
+    # Проверка победы
+    if combat.enemy_hp <= 0:
+        combat.enemy_hp = 0
+        combat.status = 'won'
+        combat.finished_at = timezone.now()
+        _add_log(combat, 'system', f'🏆 Победа! +{enemy.xp_reward} XP, +{enemy.gold_reward} золота')
+        _apply_rewards(player, enemy)
+    else:
+        # Враг отвечает
+        enemy_damage = max(1, enemy.attack - player.endurance // 2)
+        combat.player_hp -= enemy_damage
+        _add_log(combat, 'enemy', f'⚔️ {enemy.name} нанёс {enemy_damage} урона.')
+        
+        # Проверка поражения
+        if combat.player_hp <= 0:
+            combat.player_hp = 0
+            combat.status = 'lost'
+            combat.finished_at = timezone.now()
+            _add_log(combat, 'system', '💀 Поражение... Ты потерял сознание.')
+    
+    combat.save()
+    _sync_player_hp(player, combat.player_hp)
+    return _combat_to_dict(combat)
+
+
+def player_defend(combat: Combat) -> dict:
+    """Игрок защищается — уменьшает урон следующего удара на 50%"""
+    if combat.status != 'active':
+        return {'error': 'Бой уже завершён'}
+    
+    player = combat.player
+    enemy = combat.enemy
+    
+    combat.turn += 1
+    _add_log(combat, 'player', '🛡 Ты встал в защиту.')
+    
+    # Враг атакует, но урон уменьшен на 50%
+    enemy_damage = max(1, enemy.attack - player.endurance // 2)
+    enemy_damage = enemy_damage // 2
+    combat.player_hp -= enemy_damage
+    _add_log(combat, 'enemy', f'⚔️ {enemy.name} нанёс {enemy_damage} урона (заблокировано).')
+    
+    if combat.player_hp <= 0:
+        combat.player_hp = 0
+        combat.status = 'lost'
+        combat.finished_at = timezone.now()
+        _add_log(combat, 'system', '💀 Поражение...')
+    
+    combat.save()
+    _sync_player_hp(player, combat.player_hp)
+    return _combat_to_dict(combat)
+
+
+def player_flee(combat: Combat) -> dict:
+    """Побег — 50% шанс успеха"""
+    if combat.status != 'active':
+        return {'error': 'Бой уже завершён'}
+    
+    if random.random() < 0.5:
+        combat.status = 'fled'
+        combat.finished_at = timezone.now()
+        _add_log(combat, 'system', '🏃 Ты сбежал с поля боя.')
+    else:
+        combat.turn += 1
+        _add_log(combat, 'system', '❌ Побег не удался!')
+        # Враг атакует
+        enemy = combat.enemy
+        player = combat.player
+        enemy_damage = max(1, enemy.attack - player.endurance // 2)
+        combat.player_hp -= enemy_damage
+        _add_log(combat, 'enemy', f'⚔️ {enemy.name} нанёс {enemy_damage} урона.')
+        
+        if combat.player_hp <= 0:
+            combat.player_hp = 0
+            combat.status = 'lost'
+            combat.finished_at = timezone.now()
+            _add_log(combat, 'system', '💀 Поражение...')
+    
+    combat.save()
+    _sync_player_hp(combat.player, combat.player_hp)
+    return _combat_to_dict(combat)
+
+
+def _apply_rewards(player: Player, enemy: Enemy):
+    """Выдаёт награды игроку"""
+    player.experience += enemy.xp_reward
+    player.gold += enemy.gold_reward
+    
+    # Проверка повышения уровня
+    while player.experience >= player.experience_to_next:
+        player.experience -= player.experience_to_next
+        player.level += 1
+        player.experience_to_next = int(100 * (player.level ** 1.8))
+        player.max_health += 10
+        player.health = player.max_health
+        player.strength += 2
+        player.agility += 2
+        player.intelligence += 2
+        player.endurance += 2
+        player.sanity += 1
+    
+    player.save()
+
+
+def _sync_player_hp(player: Player, new_hp: int):
+    """Синхронизирует HP игрока после боя"""
+    player.health = max(1, new_hp) if new_hp > 0 else player.max_health // 2
+    player.save()
+
+
+def _add_log(combat: Combat, actor: str, message: str):
+    """Добавляет запись в лог боя"""
+    combat.log.append({
+        'turn': combat.turn,
+        'actor': actor,  # 'player', 'enemy', 'system'
+        'message': message,
+    })
+
+
+def _combat_to_dict(combat: Combat) -> dict:
+    """Превращает бой в словарь для JSON"""
+    return {
+        'id': combat.id,
+        'status': combat.status,
+        'turn': combat.turn,
+        'player': {
+            'hp': combat.player_hp,
+            'max_hp': combat.player.max_health,
+            'username': combat.player.user.username,
+        },
+        'enemy': {
+            'id': combat.enemy.id,
+            'name': combat.enemy.name,
+            'hp': combat.enemy_hp,
+            'max_hp': combat.enemy.health,
+            'level': combat.enemy.level,
+        },
+        'log': combat.log[-10:],  # последние 10 записей
+    }

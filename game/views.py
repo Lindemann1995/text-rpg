@@ -8,6 +8,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 import secrets
+from .combat import start_combat, player_attack, player_defend, player_flee
+from .models import Enemy, Combat
 
 from .models import Scene, Player, CharacterClass, Choice, Flag
 from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
@@ -268,3 +270,75 @@ def choose_in_scene(request):
             'next_scene': None,
             'is_end': True,
         })
+
+@api_view(['POST'])
+def combat_start(request):
+    """Начать бой с врагом (по enemy_slug)"""
+    enemy_slug = request.data.get('enemy_slug')
+    
+    if not enemy_slug:
+        return Response({'error': 'Не указан enemy_slug'}, status=400)
+    
+    try:
+        enemy = Enemy.objects.get(slug=enemy_slug)
+    except Enemy.DoesNotExist:
+        return Response({'error': 'Враг не найден'}, status=404)
+    
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль игрока не найден'}, status=404)
+    
+    # Проверка: нет ли уже активного боя
+    active = Combat.objects.filter(player=player, status='active').first()
+    if active:
+        return Response({
+            'error': 'У тебя уже есть активный бой',
+            'combat_id': active.id,
+        }, status=400)
+    
+    combat = start_combat(player, enemy)
+    
+    return Response({
+        'combat_id': combat.id,
+        'enemy_name': enemy.name,
+        'enemy_hp': enemy.health,
+        'player_hp': player.health,
+        'player_max_hp': player.max_health,
+        'log': combat.log,
+    })
+
+
+@api_view(['POST'])
+def combat_action(request, combat_id):
+    """Сделать ход в бою (attack / defend / flee)"""
+    action = request.data.get('action')
+    
+    if action not in ['attack', 'defend', 'flee']:
+        return Response({'error': 'Неверное действие'}, status=400)
+    
+    try:
+        combat = Combat.objects.get(id=combat_id, player=request.user.player)
+    except Combat.DoesNotExist:
+        return Response({'error': 'Бой не найден'}, status=404)
+    
+    if action == 'attack':
+        result = player_attack(combat)
+    elif action == 'defend':
+        result = player_defend(combat)
+    else:  # flee
+        result = player_flee(combat)
+    
+    return Response(result)
+
+
+@api_view(['GET'])
+def combat_state(request, combat_id):
+    """Получить состояние боя"""
+    try:
+        combat = Combat.objects.get(id=combat_id, player=request.user.player)
+    except Combat.DoesNotExist:
+        return Response({'error': 'Бой не найден'}, status=404)
+    
+    from .combat import _combat_to_dict
+    return Response(_combat_to_dict(combat))

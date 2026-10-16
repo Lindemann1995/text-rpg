@@ -92,6 +92,14 @@ class Player(models.Model):
         default='none',
         verbose_name='Фракция'
     )
+    current_location = models.ForeignKey(
+        'Location',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='players_here',
+        verbose_name='Текущая локация'
+    )
 
     # Подтверждение email
     email_verified = models.BooleanField(
@@ -368,3 +376,136 @@ class Inventory(models.Model):
     
     def __str__(self):
         return f'{self.player.user.username}: {self.item.name} x{self.quantity}'
+
+class Location(models.Model):
+    """Локация — регион на карте мира"""
+    
+    name = models.CharField(max_length=100, verbose_name='Название')
+    slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
+    description = models.TextField(blank=True, verbose_name='Описание')
+    icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка')
+    
+    min_level = models.IntegerField(default=1, verbose_name='Мин. уровень')
+    is_available = models.BooleanField(default=True, verbose_name='Доступна')
+    
+    # Позиция на карте (для визуала в будущем)
+    map_x = models.IntegerField(default=0, verbose_name='X на карте')
+    map_y = models.IntegerField(default=0, verbose_name='Y на карте')
+    
+    class Meta:
+        verbose_name = 'Локация'
+        verbose_name_plural = 'Локации'
+        ordering = ['min_level']
+    
+    def __str__(self):
+        return f'{self.name} (ур. {self.min_level}+)'
+
+
+class Enemy(models.Model):
+    """Враг — монстр в локации"""
+    
+    ENEMY_TYPES = [
+        ('normal', 'Обычный'),
+        ('elite', 'Элитный'),
+        ('boss', 'Босс'),
+    ]
+    
+    name = models.CharField(max_length=100, verbose_name='Имя')
+    slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
+    description = models.TextField(blank=True, verbose_name='Описание')
+    icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка')
+    
+    enemy_type = models.CharField(
+        max_length=20,
+        choices=ENEMY_TYPES,
+        default='normal',
+        verbose_name='Тип'
+    )
+    
+    location = models.ForeignKey(
+        'Location',
+        on_delete=models.CASCADE,
+        related_name='enemies',
+        verbose_name='Локация',
+        null=True,
+        blank=True
+    )
+    
+    level = models.IntegerField(default=1, verbose_name='Уровень')
+    health = models.IntegerField(default=50, verbose_name='HP')
+    attack = models.IntegerField(default=5, verbose_name='Атака')
+    defense = models.IntegerField(default=0, verbose_name='Защита')
+    
+    # Награды
+    xp_reward = models.IntegerField(default=10, verbose_name='Опыт')
+    gold_reward = models.IntegerField(default=5, verbose_name='Золото')
+    
+    # Способности (для боссов)
+    abilities = models.JSONField(
+        default=dict,
+        blank=True,
+        verbose_name='Способности',
+        help_text='Например: {"poison": true, "summon_wolves": 3}'
+    )
+    
+    class Meta:
+        verbose_name = 'Враг'
+        verbose_name_plural = 'Враги'
+        ordering = ['location', 'level']
+    
+    def __str__(self):
+        return f'{self.name} (ур. {self.level})'
+
+class Combat(models.Model):
+    """Активный бой игрока"""
+    
+    STATUSES = [
+        ('active', 'Активен'),
+        ('won', 'Победа'),
+        ('lost', 'Поражение'),
+        ('fled', 'Побег'),
+    ]
+    
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.CASCADE,
+        related_name='combats',
+        verbose_name='Игрок'
+    )
+    enemy = models.ForeignKey(
+        Enemy,
+        on_delete=models.CASCADE,
+        verbose_name='Враг'
+    )
+    
+    player_hp = models.IntegerField(verbose_name='HP игрока')
+    enemy_hp = models.IntegerField(verbose_name='HP врага')
+    
+    turn = models.IntegerField(default=1, verbose_name='Ход')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUSES,
+        default='active',
+        verbose_name='Статус'
+    )
+    
+    log = models.JSONField(
+        default=list,
+        blank=True,
+        verbose_name='Лог боя',
+        help_text='История ходов'
+    )
+    
+    # Для боссов — сколько раз уже призывал, отравлял и т.д.
+    boss_state = models.JSONField(default=dict, blank=True, verbose_name='Состояние босса')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        verbose_name = 'Бой'
+        verbose_name_plural = 'Бои'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f'{self.player.user.username} vs {self.enemy.name} ({self.status})'
