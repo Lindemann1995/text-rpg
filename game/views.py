@@ -761,23 +761,19 @@ def player_equip(request):
     except Item.DoesNotExist:
         return Response({'error': 'Предмет не найден'}, status=404)
     
-    # Проверка: предмет в инвентаре?
     try:
         inv = Inventory.objects.get(player=player, item=item)
     except Inventory.DoesNotExist:
         return Response({'error': 'У тебя нет этого предмета'}, status=400)
     
-    # Проверка слота
     if not item.equip_slot:
         return Response({'error': 'Этот предмет нельзя надеть'}, status=400)
     
-    # Проверка уровня
     if player.level < item.required_level:
         return Response({
             'error': f'Нужен уровень {item.required_level}'
         }, status=400)
     
-    # Проверка класса
     allowed_classes = item.required_classes.all()
     if allowed_classes.exists():
         if not player.character_class:
@@ -787,18 +783,37 @@ def player_equip(request):
                 'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'
             }, status=400)
     
-    # Снимаем текущий предмет из этого слота
-    EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
-    
-    # Снимаем старую экипировку (сбрасываем is_equipped)
-    Inventory.objects.filter(player=player, item__equip_slot=item.equip_slot).update(is_equipped=False)
+    # Снимаем текущий предмет из этого слота (и его бонусы)
+    old_eq = EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).first()
+    if old_eq and old_eq.item:
+        old_item = old_eq.item
+        player.strength -= old_item.bonus_strength
+        player.agility -= old_item.bonus_agility
+        player.intelligence -= old_item.bonus_intelligence
+        player.endurance -= old_item.bonus_endurance
+        player.sanity -= old_item.bonus_sanity
+        player.max_health -= old_item.bonus_health
+        player.max_mana -= old_item.bonus_mana
     
     # Надеваем новый
+    EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
     EquipmentSlot.objects.create(
         player=player,
         slot=item.equip_slot,
         item=item,
     )
+    
+    # Применяем бонусы нового
+    player.strength += item.bonus_strength
+    player.agility += item.bonus_agility
+    player.intelligence += item.bonus_intelligence
+    player.endurance += item.bonus_endurance
+    player.sanity += item.bonus_sanity
+    player.max_health += item.bonus_health
+    player.max_mana += item.bonus_mana
+    player.save()
+    
+    Inventory.objects.filter(player=player, item__equip_slot=item.equip_slot).update(is_equipped=False)
     inv.is_equipped = True
     inv.save()
     
@@ -822,12 +837,22 @@ def player_unequip(request):
         return Response({'error': 'Профиль не найден'}, status=404)
     
     eq = EquipmentSlot.objects.filter(player=player, slot=slot).first()
-    if not eq:
+    if not eq or not eq.item:
         return Response({'error': 'В этом слоте ничего нет'}, status=400)
     
-    if eq.item:
-        Inventory.objects.filter(player=player, item=eq.item).update(is_equipped=False)
+    item = eq.item
     
+    # Снимаем бонусы
+    player.strength -= item.bonus_strength
+    player.agility -= item.bonus_agility
+    player.intelligence -= item.bonus_intelligence
+    player.endurance -= item.bonus_endurance
+    player.sanity -= item.bonus_sanity
+    player.max_health -= item.bonus_health
+    player.max_mana -= item.bonus_mana
+    player.save()
+    
+    Inventory.objects.filter(player=player, item=item).update(is_equipped=False)
     eq.delete()
     
     return Response({'message': 'Снято'})
