@@ -118,7 +118,8 @@ class Player(models.Model):
     # Метаданные.
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Обновлён')
-
+    enemies_killed = models.IntegerField(default=0, verbose_name='Убито врагов')
+    
     class Meta:
         verbose_name = 'Игрок'
         verbose_name_plural = 'Игроки'
@@ -423,15 +424,34 @@ class Inventory(models.Model):
 class Location(models.Model):
     """Локация — регион на карте мира"""
     
+    # 1. Справочники (Choices) принято объявлять в самом начале класса
+    LOCATION_TYPES = [
+        ('farm', 'Фарм (Охота)'),
+        ('trade', 'Торговая'),
+        ('story', 'Сюжетная'),
+        ('dungeon', 'Подземелье'),
+    ]
+    
+    # 2. Основные поля
     name = models.CharField(max_length=100, verbose_name='Название')
     slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
     description = models.TextField(blank=True, verbose_name='Описание')
     icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка')
     
+    # 3. Тип локации (добавили)
+    location_type = models.CharField(
+        max_length=20,
+        choices=LOCATION_TYPES,
+        default='farm',
+        verbose_name='Тип локации',
+        help_text='Определяет, что откроется при входе в локацию'
+    )
+    
+    # 4. Настройки доступа и карты
     min_level = models.IntegerField(default=1, verbose_name='Мин. уровень')
     is_available = models.BooleanField(default=True, verbose_name='Доступна')
     
-    # Позиция на карте (для визуала в будущем)
+    # 5. Позиция на карте
     map_x = models.IntegerField(default=0, verbose_name='X на карте')
     map_y = models.IntegerField(default=0, verbose_name='Y на карте')
     
@@ -441,7 +461,8 @@ class Location(models.Model):
         ordering = ['min_level']
     
     def __str__(self):
-        return f'{self.name} (ур. {self.min_level}+)'
+        # Добавили отображение типа локации для удобства в админке
+        return f'{self.name} (ур. {self.min_level}+) [{self.get_location_type_display()}]'
 
 
 class Enemy(models.Model):
@@ -626,3 +647,45 @@ class EquipmentSlot(models.Model):
     
     def __str__(self):
         return f'{self.player.user.username} — {self.slot}: {self.item.name if self.item else "пусто"}'
+    
+class EnemyLoot(models.Model):
+    """Настройка выпадения предметов с конкретного врага (с учетом уровня врага)"""
+    
+    enemy = models.ForeignKey(
+        Enemy, 
+        on_delete=models.CASCADE, 
+        related_name='loot_table',
+        verbose_name='Враг'
+    )
+    item = models.ForeignKey(
+        Item, 
+        on_delete=models.CASCADE, 
+        verbose_name='Выпадающий предмет'
+    )
+    
+    # НОВЫЕ ПОЛЯ ДЛЯ ФИЛЬТРАЦИИ ПО УРОВНЮ МОБА
+    min_enemy_level = models.IntegerField(
+        default=1, 
+        verbose_name='Мин. уровень моба'
+    )
+    max_enemy_level = models.IntegerField(
+        default=100, 
+        verbose_name='Макс. уровень моба'
+    )
+    
+    chance = models.IntegerField(
+        default=10, 
+        verbose_name='Шанс выпадения (%)',
+        help_text='От 1 до 100. 100 = падает всегда.'
+    )
+    quantity_min = models.IntegerField(default=1, verbose_name='Мин. количество')
+    quantity_max = models.IntegerField(default=1, verbose_name='Макс. количество')
+
+    class Meta:
+        verbose_name = 'Лут с врага'
+        verbose_name_plural = 'Таблицы лута'
+        unique_together = [['enemy', 'item', 'min_enemy_level', 'max_enemy_level']]
+        ordering = ['enemy', 'min_enemy_level']
+
+    def __str__(self):
+        return f'{self.enemy.name} (Ур. {self.min_enemy_level}-{self.max_enemy_level}) -> {self.item.name} ({self.chance}%)'

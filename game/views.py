@@ -15,6 +15,36 @@ from .models import (
     Trader, EquipmentSlot,
 )
 from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
+from django.utils import timezone
+import datetime # <--- ДОБАВЛЕН ИМПОРТ ДЛЯ РАБОТЫ СО ВРЕМЕНЕМ
+
+def apply_regen(player):
+    """Ленивая регенерация HP. Восстанавливает 5% HP каждые 3 минуты."""
+    # Если у игрока полное HP, ничего не делаем
+    if player.health >= player.max_health:
+        return
+
+    now = timezone.now()
+    # Считаем, сколько секунд прошло с последнего обновления
+    # ВАЖНО: Django автоматически обновляет player.updated_at при каждом save()
+    time_passed = (now - player.updated_at).total_seconds()
+
+    # Если прошло 3 минуты (180 секунд)
+    if time_passed >= 180:
+        # Сколько раз по 3 минуты прошло (например, если прошло 7 минут, это 2 раза)
+        ticks = int(time_passed // 180)
+        
+        # Восстанавливаем 5% от максимального HP за каждый тик
+        regen_amount = int(player.max_health * 0.05) * ticks
+        
+        player.health += regen_amount
+        
+        # Не даем HP превысить максимум
+        if player.health > player.max_health:
+            player.health = player.max_health
+            
+        player.save()
+        print(f"=== РЕГЕНЕРАЦИЯ: {player.user.username} восстановил {regen_amount} HP. Теперь {player.health}/{player.max_health} ===")
 
 
 def scene_to_dict(scene):
@@ -82,6 +112,16 @@ def register(request):
     player = user.player
     player.email_verification_token = token
     player.save()
+
+    # Выдаем стартовый меч новому игроку
+    try:
+        starter_sword = Item.objects.get(slug='rusty_sword')
+        Inventory.objects.create(player=player, item=starter_sword, quantity=1, is_equipped=True)
+        EquipmentSlot.objects.create(player=player, slot='weapon', item=starter_sword)
+        player.strength += starter_sword.bonus_strength
+        player.save()
+    except Item.DoesNotExist:
+        print("ОШИБКА: Стартовый меч не найден в базе!")
     
     # "Отправляем" письмо (в консоль)
     verification_url = f'https://dev.api.code-nest.ru/api/auth/verify-email/{token}/'
@@ -137,6 +177,9 @@ def me(request):
         return Response({
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
+    
+    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ ПЕРЕД ВЫДАЧЕЙ
+    apply_regen(player)
     
     serializer = PlayerSerializer(player)
     return Response(serializer.data)
@@ -202,6 +245,9 @@ def current_scene(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
+    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ
+    apply_regen(player)
+
     # Если игрок ещё не начинал — ставим стартовую сцену
     if not player.current_scene:
         start = Scene.objects.filter(is_start=True).first()
@@ -293,13 +339,15 @@ def combat_start(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
+    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ ПЕРЕД БОЕМ (вдруг он давно ждал)
+    apply_regen(player)
+
     # Проверка: нет ли уже активного боя
     active = Combat.objects.filter(player=player, status='active').first()
     if active:
-        return Response({
-            'error': 'У тебя уже есть активный бой',
-            'combat_id': active.id,
-        }, status=400)
+        active.status = 'fled'
+        active.finished_at = timezone.now()
+        active.save()
     
     combat = start_combat(player, enemy)
     
@@ -347,6 +395,38 @@ def combat_state(request, combat_id):
     from .combat import _combat_to_dict
     return Response(_combat_to_dict(combat))
 
+@api_view(['GET'])
+def get_locations(request):
+    """Список всех доступных локаций с их врагами"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    locations = Location.objects.filter(is_available=True).order_by('min_level')
+    
+    result = []
+    for loc in locations:
+        enemies = loc.enemies.filter(enemy_type='normal')
+        enemies_data = [{
+            'slug': e.slug,
+            'name': e.name,
+            'level': e.level,
+            'icon': e.icon
+        } for e in enemies]
+
+        result.append({
+            'id': loc.id,
+            'name': loc.name,
+            'slug': loc.slug,
+            'description': loc.description,
+            'min_level': loc.min_level,
+            'enemies': enemies_data,
+            'location_type': loc.location_type,
+        })
+    
+    return Response(result)
+
 @api_view(['POST'])
 def location_hunt(request, slug):
     """Случайный враг из локации (не босс)"""
@@ -357,13 +437,11 @@ def location_hunt(request, slug):
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
     
-    # Все обычные враги локации
     enemies = list(location.enemies.filter(enemy_type='normal'))
     
     if not enemies:
         return Response({'error': 'В этой локации нет врагов'}, status=404)
     
-    # Случайный враг
     enemy = random.choice(enemies)
     
     return Response({
@@ -393,7 +471,6 @@ def location_boss(request, slug):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
-    # Босс требует уровень выше min_level локации
     required_level = location.min_level + 5
     
     if player.level < required_level:
@@ -420,7 +497,6 @@ def player_rest(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
-    # Если HP уже полное
     if player.health >= player.max_health:
         return Response({
             'error': 'У тебя уже полное здоровье',
@@ -428,7 +504,6 @@ def player_rest(request):
             'player_max_hp': player.max_health,
         }, status=400)
     
-    # Стоимость: 10 золота × уровень
     cost = 10 * player.level
     
     if player.gold < cost:
@@ -438,7 +513,6 @@ def player_rest(request):
             'player_gold': player.gold,
         }, status=400)
     
-    # Списываем золото, восстанавливаем HP
     player.gold -= cost
     player.health = player.max_health
     player.save()
@@ -464,7 +538,6 @@ def use_potion(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
     
-    # Ищем зелье в инвентаре
     try:
         item = Item.objects.get(slug=potion_slug, item_type='potion')
     except Item.DoesNotExist:
@@ -478,7 +551,6 @@ def use_potion(request):
     if inv.quantity <= 0:
         return Response({'error': 'Зелья закончились'}, status=400)
     
-    # Применяем эффект
     if item.effect_type == 'heal_hp':
         if player.health >= player.max_health:
             return Response({'error': 'У тебя полное HP'}, status=400)
@@ -496,7 +568,6 @@ def use_potion(request):
     else:
         return Response({'error': 'Неизвестный эффект'}, status=400)
     
-    # Уменьшаем количество
     inv.quantity -= 1
     if inv.quantity <= 0:
         inv.delete()
@@ -566,7 +637,6 @@ def buy_potion(request):
             'error': f'Нужно {item.price} золота (у тебя {player.gold})',
         }, status=400)
     
-    # Проверяем лимит (макс 10 зелий в инвентаре)
     inv, created = Inventory.objects.get_or_create(
         player=player,
         item=item,
@@ -576,7 +646,6 @@ def buy_potion(request):
     if inv.quantity >= 10:
         return Response({'error': 'Максимум 10 зелий в инвентаре'}, status=400)
     
-    # Списываем золото, добавляем зелье
     player.gold -= item.price
     inv.quantity += 1
     inv.save()
@@ -684,11 +753,9 @@ def trader_buy(request, slug):
             'error': f'Нужно {item.price} золота (у тебя {player.gold})'
         }, status=400)
     
-    # Списываем золото
     player.gold -= item.price
     player.save()
     
-    # Добавляем в инвентарь
     inv, created = Inventory.objects.get_or_create(
         player=player,
         item=item,
@@ -770,20 +837,15 @@ def player_equip(request):
         return Response({'error': 'Этот предмет нельзя надеть'}, status=400)
     
     if player.level < item.required_level:
-        return Response({
-            'error': f'Нужен уровень {item.required_level}'
-        }, status=400)
+        return Response({'error': f'Нужен уровень {item.required_level}'}, status=400)
     
     allowed_classes = item.required_classes.all()
     if allowed_classes.exists():
         if not player.character_class:
             return Response({'error': 'Сначала выбери класс'}, status=400)
         if player.character_class not in allowed_classes:
-            return Response({
-                'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'
-            }, status=400)
+            return Response({'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'}, status=400)
     
-    # Снимаем текущий предмет из этого слота (и его бонусы)
     old_eq = EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).first()
     if old_eq and old_eq.item:
         old_item = old_eq.item
@@ -795,15 +857,9 @@ def player_equip(request):
         player.max_health -= old_item.bonus_health
         player.max_mana -= old_item.bonus_mana
     
-    # Надеваем новый
     EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
-    EquipmentSlot.objects.create(
-        player=player,
-        slot=item.equip_slot,
-        item=item,
-    )
+    EquipmentSlot.objects.create(player=player, slot=item.equip_slot, item=item)
     
-    # Применяем бонусы нового
     player.strength += item.bonus_strength
     player.agility += item.bonus_agility
     player.intelligence += item.bonus_intelligence
@@ -817,10 +873,7 @@ def player_equip(request):
     inv.is_equipped = True
     inv.save()
     
-    return Response({
-        'message': f'Надето: {item.name}',
-        'slot': item.equip_slot,
-    })
+    return Response({'message': f'Надето: {item.name}', 'slot': item.equip_slot})
 
 
 @api_view(['POST'])
@@ -842,7 +895,6 @@ def player_unequip(request):
     
     item = eq.item
     
-    # Снимаем бонусы
     player.strength -= item.bonus_strength
     player.agility -= item.bonus_agility
     player.intelligence -= item.bonus_intelligence
@@ -850,8 +902,16 @@ def player_unequip(request):
     player.sanity -= item.bonus_sanity
     player.max_health -= item.bonus_health
     player.max_mana -= item.bonus_mana
-    player.save()
     
+    if player.strength < 1: player.strength = 1
+    if player.agility < 1: player.agility = 1
+    if player.intelligence < 1: player.intelligence = 1
+    if player.endurance < 1: player.endurance = 1
+    if player.sanity < 1: player.sanity = 1
+    if player.max_health < 1: player.max_health = 1
+    if player.max_mana < 1: player.max_mana = 1
+    
+    player.save()
     Inventory.objects.filter(player=player, item=item).update(is_equipped=False)
     eq.delete()
     
@@ -874,6 +934,37 @@ def player_equipment(request):
             'slug': eq.item.slug if eq.item else None,
             'name': eq.item.name if eq.item else None,
             'icon': eq.item.icon if eq.item else None,
+            'rarity': eq.item.rarity if eq.item else None,         
+            'equip_slot': eq.slot,                                 
+            'bonus_strength': eq.item.bonus_strength if eq.item else 0, 
+            'bonus_endurance': eq.item.bonus_endurance if eq.item else 0,
+            'bonus_agility': eq.item.bonus_agility if eq.item else 0,
+            'bonus_intelligence': eq.item.bonus_intelligence if eq.item else 0,
+            'bonus_sanity': eq.item.bonus_sanity if eq.item else 0,
+            'bonus_health': eq.item.bonus_health if eq.item else 0,
+            'bonus_mana': eq.item.bonus_mana if eq.item else 0,
         }
     
     return Response({'equipment': result})
+
+@api_view(['GET'])
+def location_enemies(request, slug):
+    """Список врагов в локации"""
+    try:
+        location = Location.objects.get(slug=slug)
+    except Location.DoesNotExist:
+        return Response({'error': 'Локация не найдена'}, status=404)
+    
+    enemies = location.enemies.all()
+    
+    result = []
+    for enemy in enemies:
+        result.append({
+            'slug': enemy.slug,
+            'name': enemy.name,
+            'level': enemy.level,
+            'hp': enemy.health,
+            'icon': '👹', # Пока стандартная иконка
+        })
+        
+    return Response({'enemies': result})

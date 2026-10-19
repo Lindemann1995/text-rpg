@@ -18,6 +18,8 @@ urlpatterns = [
     path('combat/<int:combat_id>/action/', views.combat_action, name='combat_action'),
     path('combat/<int:combat_id>/', views.combat_state, name='combat_state'),
     # Локации
+    path('locations/', views.get_locations, name='get_locations'),
+    path('location/<slug:slug>/enemies/', views.location_enemies, name='location_enemies'),
     path('location/<slug:slug>/hunt/', views.location_hunt, name='location_hunt'),
     path('location/<slug:slug>/boss/', views.location_boss, name='location_boss'),
     # Аутентификация
@@ -45,4 +47,6 @@ urlpatterns = [
     path('player/equipment/', views.player_equipment, name='player_equipment'),
     path('player/equip/', views.player_equip, name='player_equip'),
     path('player/unequip/', views.player_unequip, name='player_unequip'),
+
+    
 ]

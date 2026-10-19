@@ -88,4 +88,5 @@ class PlayerSerializer(serializers.ModelSerializer):
             'health', 'max_health', 'mana', 'max_mana', 'gold',
             'faction', 'is_in_tutorial', 'email_verified',
             'created_at',
+            'enemies_killed',
         ]

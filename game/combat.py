@@ -3,7 +3,7 @@
 """
 import random
 from django.utils import timezone
-from .models import Combat, Enemy, Player, Flag
+from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot
 
 
 def start_combat(player: Player, enemy: Enemy) -> Combat:
@@ -30,10 +30,7 @@ def player_attack(combat: Combat) -> dict:
     player = combat.player
     enemy = combat.enemy
     
-    # Базовый урон = атака игрока (сила) минус защита врага
     base_damage = max(1, player.strength - enemy.defense)
-    
-    # Критический удар — 15% шанс, +50% урона
     is_crit = random.random() < 0.15
     damage = int(base_damage * 1.5) if is_crit else base_damage
     
@@ -51,14 +48,25 @@ def player_attack(combat: Combat) -> dict:
         combat.status = 'won'
         combat.finished_at = timezone.now()
         _add_log(combat, 'system', f'🏆 Победа! +{enemy.xp_reward} XP, +{enemy.gold_reward} золота')
-        _apply_rewards(player, enemy)
+        
+        print(f"=== ЛОГ: ВРАГ {enemy.name} ПОБЕЖДЕН. ВЫЗОВ _apply_rewards ===")
+        
+        # ВЫДАЕМ НАГРАДЫ И ПОЛУЧАЕМ СПИСОК
+        dropped_items = _apply_rewards(player, enemy)
+        
+        # Сохраняем лут в бой (чтобы Flutter мог его прочитать)
+        combat.boss_state = {'dropped_items': dropped_items}
+        combat.save()
+        
+        # Возвращаем словарь с лутом
+        result = _combat_to_dict(combat)
+        result['dropped_items'] = dropped_items
+        return result
     else:
-        # Враг отвечает
         enemy_damage = max(1, enemy.attack - player.endurance // 2)
         combat.player_hp -= enemy_damage
         _add_log(combat, 'enemy', f'⚔️ {enemy.name} нанёс {enemy_damage} урона.')
         
-        # Проверка поражения
         if combat.player_hp <= 0:
             combat.player_hp = 0
             combat.status = 'lost'
@@ -81,7 +89,6 @@ def player_defend(combat: Combat) -> dict:
     combat.turn += 1
     _add_log(combat, 'player', '🛡 Ты встал в защиту.')
     
-    # Враг атакует, но урон уменьшен на 50%
     enemy_damage = max(1, enemy.attack - player.endurance // 2)
     enemy_damage = enemy_damage // 2
     combat.player_hp -= enemy_damage
@@ -110,7 +117,6 @@ def player_flee(combat: Combat) -> dict:
     else:
         combat.turn += 1
         _add_log(combat, 'system', '❌ Побег не удался!')
-        # Враг атакует
         enemy = combat.enemy
         player = combat.player
         enemy_damage = max(1, enemy.attack - player.endurance // 2)
@@ -128,25 +134,89 @@ def player_flee(combat: Combat) -> dict:
     return _combat_to_dict(combat)
 
 
-def _apply_rewards(player: Player, enemy: Enemy):
-    """Выдаёт награды игроку"""
-    player.experience += enemy.xp_reward
-    player.gold += enemy.gold_reward
-    
-    # Проверка повышения уровня
-    while player.experience >= player.experience_to_next:
-        player.experience -= player.experience_to_next
-        player.level += 1
-        player.experience_to_next = int(100 * (player.level ** 1.8))
-        player.max_health += 10
-        player.health = player.max_health
-        player.strength += 2
-        player.agility += 2
-        player.intelligence += 2
-        player.endurance += 2
-        player.sanity += 1
-    
-    player.save()
+def _apply_rewards(player: Player, enemy: Enemy) -> list:
+    dropped_items = []
+    try:
+        # 1. Награды за уровень
+        level_diff = player.level - enemy.level
+        xp_reward = enemy.xp_reward
+        gold_reward = enemy.gold_reward
+        
+        if level_diff >= 10:
+            xp_reward = max(1, xp_reward // 10)
+            gold_reward = max(0, gold_reward // 10)
+        elif level_diff <= -5:
+            xp_reward = int(xp_reward * 1.5)
+            gold_reward = int(gold_reward * 1.5)
+
+        player.experience += xp_reward
+        player.gold += gold_reward
+        
+        # 2. СЧЕТЧИК УБИЙСТВ
+        player.enemies_killed += 1
+        print(f"=== СТАТИСТИКА: {player.user.username} убил {enemy.name}. Всего убийств: {player.enemies_killed} ===")
+
+        # 3. Лут
+        location = enemy.location 
+        possible_loots = enemy.loot_table.all()
+        
+        for loot in possible_loots:
+            if not (loot.min_enemy_level <= enemy.level <= loot.max_enemy_level):
+                continue
+                
+            drop_chance = loot.chance
+            if location:
+                loc_level_diff = player.level - location.min_level
+                if loc_level_diff > 5:
+                    penalty = (loc_level_diff - 5) * 10
+                    drop_chance = max(0, drop_chance - penalty)
+
+            roll = random.randint(1, 100)
+            if roll <= drop_chance:
+                qty = random.randint(loot.quantity_min, loot.quantity_max)
+                
+                inv, created = Inventory.objects.get_or_create(
+                    player=player, 
+                    item=loot.item,
+                    defaults={'quantity': 0}
+                )
+                inv.quantity += qty
+                inv.save()
+                
+                dropped_items.append({
+                    'slug': loot.item.slug,
+                    'name': loot.item.name,
+                    'quantity': qty,
+                    'rarity': loot.item.rarity,
+                    'bonus_strength': loot.item.bonus_strength,
+                    'bonus_agility': loot.item.bonus_agility,
+                    'bonus_intelligence': loot.item.bonus_intelligence,
+                    'bonus_endurance': loot.item.bonus_endurance,
+                    'bonus_health': loot.item.bonus_health,
+                })
+                print(f"=== УСПЕХ: {player.user.username} выбил {loot.item.name} (x{qty}) ===")
+
+        # 4. Повышение уровня
+        while player.experience >= player.experience_to_next:
+            player.experience -= player.experience_to_next
+            player.level += 1
+            player.experience_to_next = int(100 * (player.level ** 1.8))
+            player.max_health += 10
+            player.health = player.max_health
+            player.strength += 2
+            player.agility += 2
+            player.intelligence += 2
+            player.endurance += 2
+            player.sanity += 1
+            print(f"=== УРОВЕНЬ ПОВЫШЕН: {player.user.username} теперь {player.level} уровня ===")
+            
+        player.save()
+        
+    except Exception as e:
+        print(f"!!! ОШИБКА ПРИ ВЫДАЧЕ НАГРАДЫ: {e}")
+        player.save()
+        
+    return dropped_items
 
 
 def _sync_player_hp(player: Player, new_hp: int):
@@ -159,7 +229,7 @@ def _add_log(combat: Combat, actor: str, message: str):
     """Добавляет запись в лог боя"""
     combat.log.append({
         'turn': combat.turn,
-        'actor': actor,  # 'player', 'enemy', 'system'
+        'actor': actor,
         'message': message,
     })
 
@@ -182,5 +252,5 @@ def _combat_to_dict(combat: Combat) -> dict:
             'max_hp': combat.enemy.health,
             'level': combat.enemy.level,
         },
-        'log': combat.log[-10:],  # последние 10 записей
+        'log': combat.log[-10:],
     }

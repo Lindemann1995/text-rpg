@@ -1,7 +1,7 @@
 from django.contrib import admin
 from .models import (
     CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
-    Location, Enemy, Combat, Trader, EquipmentSlot,
+    Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot,
 )
 
 
@@ -112,3 +112,9 @@ class EquipmentSlotAdmin(admin.ModelAdmin):
     list_display = ['player', 'slot', 'item', 'equipped_at']
     list_filter = ['slot']
     search_fields = ['player__user__username', 'item__name']
+
+@admin.register(EnemyLoot)
+class EnemyLootAdmin(admin.ModelAdmin):
+    list_display = ['enemy', 'item', 'min_enemy_level', 'max_enemy_level', 'chance', 'quantity_min', 'quantity_max']
+    list_filter = ['enemy', 'item__rarity', 'min_enemy_level']
+    search_fields = ['enemy__name', 'item__name']
