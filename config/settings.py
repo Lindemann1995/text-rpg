@@ -74,10 +74,13 @@ DATABASES = {
 }
 
 CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')],
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [{
+                "address": "redis://127.0.0.1:6379/0",
+                "socket_timeout": 20,
+            }],
         },
     },
 }
@@ -109,7 +112,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
-    'UNICODE_JSON': True,  # ← добавь это
+    'UNICODE_JSON': True,
 }
 
 SIMPLE_JWT = {
@@ -122,3 +125,7 @@ SIMPLE_JWT = {
 # Email — для разработки выводим в консоль
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'noreply@code-nest.ru'
+
+# ⬇️ ДОБАВЛЕНО ДЛЯ ПРОВЕРКИ АССЕТОВ ⬇️
+# Путь к папке assets/images (судя по скриншоту, она лежит прямо в корне проекта C:\ten_drevnih\assets\images)
+ASSETS_DIR = BASE_DIR / 'assets' / 'images'

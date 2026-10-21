@@ -4,42 +4,42 @@ from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.shortcuts import get_object_or_404
 import secrets
 from .combat import start_combat, player_attack, player_defend, player_flee
 from .models import (
     Scene, Player, CharacterClass, Choice, Flag,
     Location, Enemy, Combat, Item, Inventory,
-    Trader, EquipmentSlot,
+    Trader, EquipmentSlot, 
+    # 🆕 ИМПОРТЫ ДЛЯ КВЕСТОВ
+    NPC, Quest, PlayerQuest, QuestLine
 )
-from .serializers import RegisterSerializer, PlayerSerializer, CharacterClassSerializer
+from .serializers import (
+    RegisterSerializer, PlayerSerializer, CharacterClassSerializer,
+    # 🆕 СЕРИАЛИЗАТОРЫ КВЕСТОВ
+    NPCSerializer, QuestSerializer, PlayerQuestSerializer, AllQuestsSerializer
+)
 from django.utils import timezone
-import datetime # <--- ДОБАВЛЕН ИМПОРТ ДЛЯ РАБОТЫ СО ВРЕМЕНЕМ
+import datetime
+from django.db.models import Q
 
 def apply_regen(player):
     """Ленивая регенерация HP. Восстанавливает 5% HP каждые 3 минуты."""
-    # Если у игрока полное HP, ничего не делаем
     if player.health >= player.max_health:
         return
 
     now = timezone.now()
-    # Считаем, сколько секунд прошло с последнего обновления
-    # ВАЖНО: Django автоматически обновляет player.updated_at при каждом save()
     time_passed = (now - player.updated_at).total_seconds()
 
-    # Если прошло 3 минуты (180 секунд)
     if time_passed >= 180:
-        # Сколько раз по 3 минуты прошло (например, если прошло 7 минут, это 2 раза)
         ticks = int(time_passed // 180)
-        
-        # Восстанавливаем 5% от максимального HP за каждый тик
         regen_amount = int(player.max_health * 0.05) * ticks
-        
         player.health += regen_amount
         
-        # Не даем HP превысить максимум
         if player.health > player.max_health:
             player.health = player.max_health
             
@@ -107,13 +107,11 @@ def register(request):
     
     user = serializer.save()
     
-    # Генерируем токен для подтверждения email
     token = secrets.token_urlsafe(32)
     player = user.player
     player.email_verification_token = token
     player.save()
 
-    # Выдаем стартовый меч новому игроку
     try:
         starter_sword = Item.objects.get(slug='rusty_sword')
         Inventory.objects.create(player=player, item=starter_sword, quantity=1, is_equipped=True)
@@ -123,7 +121,6 @@ def register(request):
     except Item.DoesNotExist:
         print("ОШИБКА: Стартовый меч не найден в базе!")
     
-    # "Отправляем" письмо (в консоль)
     verification_url = f'https://dev.api.code-nest.ru/api/auth/verify-email/{token}/'
     send_mail(
         subject='Подтверждение email — Тень Древних',
@@ -178,7 +175,6 @@ def me(request):
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
     
-    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ ПЕРЕД ВЫДАЧЕЙ
     apply_regen(player)
     
     serializer = PlayerSerializer(player)
@@ -218,16 +214,12 @@ def choose_class(request):
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
     
-    # Устанавливаем класс
     player.character_class = character_class
-    
-    # Применяем базовые статы класса
     player.strength = character_class.base_strength
     player.agility = character_class.base_agility
     player.intelligence = character_class.base_intelligence
     player.endurance = character_class.base_endurance
     player.sanity = character_class.base_sanity
-    
     player.save()
     
     serializer = PlayerSerializer(player)
@@ -245,10 +237,8 @@ def current_scene(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
-    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ
     apply_regen(player)
 
-    # Если игрок ещё не начинал — ставим стартовую сцену
     if not player.current_scene:
         start = Scene.objects.filter(is_start=True).first()
         if not start:
@@ -258,7 +248,6 @@ def current_scene(request):
     
     serializer_data = scene_to_dict(player.current_scene)
     
-    # Добавляем информацию об игроке
     serializer_data['player'] = {
         'username': player.user.username,
         'level': player.level,
@@ -289,13 +278,11 @@ def choose_in_scene(request):
     if not player.current_scene:
         return Response({'error': 'Игрок не находится в сцене'}, status=400)
     
-    # Ищем выбор среди выборов текущей сцены
     try:
         choice = Choice.objects.get(id=choice_id, scene=player.current_scene)
     except Choice.DoesNotExist:
         return Response({'error': 'Такого выбора нет в текущей сцене'}, status=404)
     
-    # Сохраняем флаг, если есть
     if choice.set_flag:
         Flag.objects.update_or_create(
             player=player,
@@ -303,7 +290,6 @@ def choose_in_scene(request):
             defaults={'value': '1'},
         )
     
-    # Переходим к следующей сцене
     if choice.next_scene:
         player.current_scene = choice.next_scene
         player.save()
@@ -339,10 +325,8 @@ def combat_start(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
     
-    # ПРИМЕНЯЕМ РЕГЕНЕРАЦИЮ ПЕРЕД БОЕМ (вдруг он давно ждал)
     apply_regen(player)
 
-    # Проверка: нет ли уже активного боя
     active = Combat.objects.filter(player=player, status='active').first()
     if active:
         active.status = 'fled'
@@ -355,6 +339,9 @@ def combat_start(request):
         'combat_id': combat.id,
         'enemy_name': enemy.name,
         'enemy_hp': enemy.health,
+        'enemy_image': enemy.image_path,
+        'enemy_bg': enemy.bg_image_path,
+        'enemy_flip': enemy.flip_image,
         'player_hp': player.health,
         'player_max_hp': player.max_health,
         'log': combat.log,
@@ -378,7 +365,7 @@ def combat_action(request, combat_id):
         result = player_attack(combat)
     elif action == 'defend':
         result = player_defend(combat)
-    else:  # flee
+    else:
         result = player_flee(combat)
     
     return Response(result)
@@ -699,6 +686,7 @@ def trader_detail(request, slug):
             'name': item.name,
             'description': item.description,
             'icon': item.icon,
+            'image_path': item.image_path,
             'item_type': item.item_type,
             'rarity': item.rarity,
             'price': item.price,
@@ -783,6 +771,8 @@ def player_inventory(request):
         player=player
     ).select_related('item')
     
+    inv_items = inv_items.filter(is_equipped=False)
+
     result = []
     for inv in inv_items:
         item = inv.item
@@ -795,8 +785,10 @@ def player_inventory(request):
             'rarity': item.rarity,
             'quantity': inv.quantity,
             'is_equipped': inv.is_equipped,
+            'image_path': item.image_path,
             'equip_slot': item.equip_slot,
             'required_level': item.required_level,
+            'is_equipped': inv.is_equipped,
             'required_classes': [c.name for c in item.required_classes.all()],
             'bonus_strength': item.bonus_strength,
             'bonus_agility': item.bonus_agility,
@@ -935,7 +927,8 @@ def player_equipment(request):
             'name': eq.item.name if eq.item else None,
             'icon': eq.item.icon if eq.item else None,
             'rarity': eq.item.rarity if eq.item else None,         
-            'equip_slot': eq.slot,                                 
+            'equip_slot': eq.slot,
+            'image_path': eq.item.image_path if eq.item else None,
             'bonus_strength': eq.item.bonus_strength if eq.item else 0, 
             'bonus_endurance': eq.item.bonus_endurance if eq.item else 0,
             'bonus_agility': eq.item.bonus_agility if eq.item else 0,
@@ -964,7 +957,202 @@ def location_enemies(request, slug):
             'name': enemy.name,
             'level': enemy.level,
             'hp': enemy.health,
-            'icon': '👹', # Пока стандартная иконка
+            'icon': '👹',
         })
         
     return Response({'enemies': result})
+
+@api_view(['POST'])
+def claim_offline_progress(request):
+    """Сбор оффлайн-награды"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    now = timezone.now()
+    time_passed = now - player.last_offline_claim
+    hours_passed = int(time_passed.total_seconds() // 3600)
+
+    if hours_passed < 1:
+        return Response({'error': 'Ты уходил меньше чем на час. Возвращайся позже!'}, status=400)
+
+    max_hours = 12
+    hours_to_reward = min(hours_passed, max_hours)
+    
+    gold_reward = hours_to_reward * player.offline_gold_rate
+
+    player.gold += gold_reward
+    player.last_offline_claim = now
+    player.save()
+
+    return Response({
+        'message': f'Пока тебя не было ({hours_to_reward} ч.), ты заработал {gold_reward} золота!',
+        'gold_earned': gold_reward,
+        'hours': hours_to_reward,
+        'total_gold': player.gold
+    })
+
+
+# ==========================================
+# 🆕 ЭНДПОИНТЫ ДЛЯ NPC И КВЕСТОВ
+# ==========================================
+
+class NPCDetailView(APIView):
+    """Получить NPC и его диалоги"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, npc_slug):
+        npc = get_object_or_404(NPC, slug=npc_slug)
+        serializer = NPCSerializer(npc)
+        return Response(serializer.data)
+
+
+class PlayerQuestsView(APIView):
+    """Получить список всех квестов игрока (в процессе и готовых к сдаче)"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        player = request.user.player
+        quests = PlayerQuest.objects.filter(player=player).exclude(status='completed')
+        serializer = PlayerQuestSerializer(quests, many=True)
+        print("=== СЫРЫЕ ДАННЫЕ АКТИВНЫХ КВЕСТОВ ===")
+        print(serializer.data)
+        return Response(serializer.data)
+
+class AllQuestsView(APIView):
+    """Получить список ВСЕХ квестов в игре (для вкладки 'Общие')"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        player = request.user.player
+        
+        # 1. Берем все квесты, которые подходят по уровню
+        all_quests = Quest.objects.filter(required_level__lte=player.level).order_by('required_level')
+        
+        # 2. Получаем все записи квестов этого игрока
+        player_quests = PlayerQuest.objects.filter(player=player)
+        
+        # 3. Разделяем на "взятые сейчас" и "уже завершенные"
+        taken_ids = set()
+        completed_ids = set()
+        
+        for pq in player_quests:
+            if pq.status == 'completed':
+                completed_ids.add(pq.quest_id)
+            else:
+                taken_ids.add(pq.quest_id)
+        
+        # 🆕 ДОБАВЬ ЭТИ ПРИНТЫ
+        print(f"=== ЗАВЕРШЕННЫЕ КВЕСТЫ ИГРОКА (ID): {completed_ids} ===")
+        print(f"=== ВЗЯТЫЕ КВЕСТЫ ИГРОКА (ID): {taken_ids} ===")
+        serializer = AllQuestsSerializer(all_quests, many=True)
+        data = serializer.data
+        
+        filtered_data = []
+        for quest_data in data:
+            quest_id = quest_data['id']
+            quest_obj = all_quests.get(id=quest_id)
+            
+            # ГЛАВНАЯ ЛОГИКА:
+            # Если квест уже завершен И он НЕ повторяемый — мы его скрываем (не добавляем в ответ)
+            if quest_id in completed_ids and not quest_obj.is_repeatable:
+                continue
+            
+            # Помечаем, взят ли квест сейчас
+            quest_data['is_taken'] = quest_id in taken_ids
+            # Плашка NEW (если не взят и не завершен)
+            quest_data['is_new'] = (quest_id not in taken_ids) and (quest_id not in completed_ids)
+            
+            filtered_data.append(quest_data)
+            
+        return Response(filtered_data)
+
+
+class AcceptQuestView(APIView):
+    """Взять квест у NPC"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        player = request.user.player
+        quest_id = request.data.get('quest_id')
+        
+        quest = get_object_or_404(Quest, id=quest_id)
+        
+        if player.level < quest.required_level:
+            return Response({'error': f'Нужен {quest.required_level} уровень'}, status=400)
+            
+        if PlayerQuest.objects.filter(player=player, quest=quest).exists():
+            return Response({'error': 'Квест уже взят'}, status=400)
+            
+        pq = PlayerQuest.objects.create(player=player, quest=quest)
+        
+        return Response({
+            'success': True, 
+            'message': 'Квест принят',
+            'quest_id': pq.id
+        })
+
+
+class CompleteQuestView(APIView):
+    """Сдать квест NPC и получить награду"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        player = request.user.player
+        player_quest_id = request.data.get('player_quest_id')
+        
+        pq = get_object_or_404(PlayerQuest, id=player_quest_id, player=player)
+        
+        if pq.status != 'ready':
+            return Response({'error': 'Квест еще не выполнен'}, status=400)
+            
+        quest = pq.quest
+        
+        # 1. Выдаем опыт и золото
+        player.experience += quest.reward_exp
+        player.gold += quest.reward_gold
+        
+        # 2. Выдаем предметы и собираем их в список для ответа
+        dropped_items = []
+        
+        if quest.reward_item and quest.reward_item_qty > 0:
+            inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_item, defaults={'quantity': 0})
+            inv.quantity += quest.reward_item_qty
+            inv.save()
+            
+            # Добавляем в список, чтобы Flutter показал его в окне
+            dropped_items.append({
+                'slug': quest.reward_item.slug,
+                'name': quest.reward_item.name,
+                'quantity': quest.reward_item_qty,
+                'rarity': quest.reward_item.rarity,
+            })
+            
+        if quest.reward_resource and quest.reward_resource_qty > 0:
+            inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_resource, defaults={'quantity': 0})
+            inv.quantity += quest.reward_resource_qty
+            inv.save()
+            
+            dropped_items.append({
+                'slug': quest.reward_resource.slug,
+                'name': quest.reward_resource.name,
+                'quantity': quest.reward_resource_qty,
+                'rarity': quest.reward_resource.rarity,
+            })
+
+        player.save()
+        
+        # 3. Отмечаем квест выполненным
+        pq.status = 'completed'
+        pq.completed_at = timezone.now()
+        pq.save()
+        
+        # 4. Возвращаем всё во Flutter
+        return Response({
+            'success': True, 
+            'message': 'Квест сдан!',
+            'exp': quest.reward_exp,
+            'gold': quest.reward_gold,
+            'dropped_items': dropped_items  # <-- ВОТ ЭТО ГЛАВНОЕ
+        })

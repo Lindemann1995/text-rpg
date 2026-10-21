@@ -3,8 +3,7 @@
 """
 import random
 from django.utils import timezone
-from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot
-
+from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot, PlayerQuest
 
 def start_combat(player: Player, enemy: Enemy) -> Combat:
     """Начинает новый бой"""
@@ -53,6 +52,9 @@ def player_attack(combat: Combat) -> dict:
         
         # ВЫДАЕМ НАГРАДЫ И ПОЛУЧАЕМ СПИСОК
         dropped_items = _apply_rewards(player, enemy)
+        
+        # 🆕 ОБНОВЛЯЕМ ПРОГРЕСС КВЕСТОВ
+        _update_kill_quests(player, enemy)
         
         # Сохраняем лут в бой (чтобы Flutter мог его прочитать)
         combat.boss_state = {'dropped_items': dropped_items}
@@ -217,6 +219,46 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
         player.save()
         
     return dropped_items
+
+
+def _update_kill_quests(player: Player, enemy: Enemy):
+    """Обновляет прогресс квестов, где нужно убить этого моба"""
+    try:
+        active_quests = PlayerQuest.objects.filter(player=player, status='active')
+        
+        for pq in active_quests:
+            # Ищем шаги этого квеста, где нужно убить именно этого моба
+            objectives = pq.quest.objectives.filter(objective_type='kill', target_enemy=enemy)
+            
+            updated = False
+            for obj in objectives:
+                obj_id_str = str(obj.id)
+                current = pq.progress_data.get(obj_id_str, 0)
+                
+                if current < obj.required_count:
+                    current += 1
+                    pq.progress_data[obj_id_str] = current
+                    updated = True
+                    
+            if updated:
+                # Проверяем, выполнены ли ВСЕ шаги этого квеста
+                all_done = True
+                for obj in pq.quest.objectives.all():
+                    current = pq.progress_data.get(str(obj.id), 0)
+                    if current < obj.required_count:
+                        all_done = False
+                        break
+                
+                if all_done:
+                    pq.status = 'ready'
+                    print(f"=== КВЕСТ ГОТОВ К СДАЧЕ: {pq.quest.title} (Игрок: {player.user.username}) ===")
+                else:
+                    print(f"=== ПРОГРЕСС КВЕСТА: {pq.quest.title} обновлен ===")
+                
+                pq.save()
+                
+    except Exception as e:
+        print(f"!!! ОШИБКА ПРИ ОБНОВЛЕНИИ КВЕСТОВ: {e}")
 
 
 def _sync_player_hp(player: Player, new_hp: int):

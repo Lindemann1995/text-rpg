@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
-    Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot,
+    Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot, 
+    NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest
 )
 
 
@@ -13,15 +14,26 @@ class CharacterClassAdmin(admin.ModelAdmin):
 
 @admin.register(Player)
 class PlayerAdmin(admin.ModelAdmin):
-    list_display = ['user', 'character_class', 'level', 'experience', 'gold', 'faction']
-    list_filter = ['character_class', 'faction', 'is_in_tutorial']
+    list_display = ['user', 'character_class', 'level', 'experience', 'gold', 'faction', 'role'] # <--- Добавили role
+    list_filter = ['character_class', 'faction', 'is_in_tutorial', 'role'] # <--- Добавили role
     search_fields = ['user__username']
-
-class ChoiceInline(admin.TabularInline):
-    model = Choice
-    fk_name = 'scene'  # ← вот эта строка
-    extra = 1
-    fields = ['text', 'next_scene', 'order', 'required_flag', 'set_flag']
+    fieldsets = (
+        ('Основное', {
+            'fields': ('user', 'character_class', 'level', 'experience', 'gold', 'faction', 'role')
+        }),
+        ('Характеристики', {
+            'fields': ('strength', 'agility', 'intelligence', 'endurance', 'sanity')
+        }),
+        ('Ресурсы и текущая сцена', {
+            'fields': ('health', 'max_health', 'mana', 'max_mana', 'current_scene', 'current_location')
+        }),
+        ('Оффлайн-прогресс', { # <--- НОВЫЙ БЛОК
+            'fields': ('last_offline_claim', 'offline_gold_rate')
+        }),
+        ('Прочее', {
+            'fields': ('is_in_tutorial', 'email_verified', 'email_verification_token', 'enemies_killed')
+        }),
+    )
 
 @admin.register(Scene)
 class SceneAdmin(admin.ModelAdmin):
@@ -29,7 +41,7 @@ class SceneAdmin(admin.ModelAdmin):
     list_filter = ['scene_type', 'is_tutorial', 'is_start', 'location']
     search_fields = ['title', 'slug', 'text']
     prepopulated_fields = {'slug': ('title',)}
-    inlines = [ChoiceInline]
+    # inlines = [ChoiceInline]
 
 
 @admin.register(Choice)
@@ -54,7 +66,7 @@ class ItemAdmin(admin.ModelAdmin):
     prepopulated_fields = {'slug': ('name',)}
     fieldsets = (
         ('Основное', {
-            'fields': ('name', 'slug', 'description', 'icon', 'item_type', 'rarity', 'price')
+            'fields': ('name', 'slug', 'description', 'icon', 'image_path','item_type', 'rarity', 'price')
         }),
         ('Бонусы к статам', {
             'fields': ('bonus_strength', 'bonus_agility', 'bonus_intelligence', 'bonus_endurance', 'bonus_sanity', 'bonus_health', 'bonus_mana')
@@ -86,11 +98,24 @@ class LocationAdmin(admin.ModelAdmin):
 
 @admin.register(Enemy)
 class EnemyAdmin(admin.ModelAdmin):
-    list_display = ['name', 'level', 'enemy_type', 'location', 'health', 'attack', 'defense']
+    list_display = ['name', 'level', 'enemy_type', 'location', 'health', 'attack', 'defense', 'image_path', 'flip_image'] # <-- Добавили в список для быстрого просмотра
     list_filter = ['enemy_type', 'location', 'level']
     search_fields = ['name', 'slug']
     prepopulated_fields = {'slug': ('name',)}
-
+    fieldsets = (
+        ('Основное', {
+            'fields': ('name', 'slug', 'description', 'icon', 'enemy_type', 'location')
+        }),
+        ('Характеристики', {
+            'fields': ('level', 'health', 'attack', 'defense', 'xp_reward', 'gold_reward')
+        }),
+        ('Визуал', {
+            'fields': ('image_path', 'bg_image_path', 'flip_image') # <-- ДОБАВИЛИ СЮДА!
+        }),
+        ('Способности', {
+            'fields': ('abilities',)
+        }),
+    )
 
 @admin.register(Combat)
 class CombatAdmin(admin.ModelAdmin):
@@ -118,3 +143,57 @@ class EnemyLootAdmin(admin.ModelAdmin):
     list_display = ['enemy', 'item', 'min_enemy_level', 'max_enemy_level', 'chance', 'quantity_min', 'quantity_max']
     list_filter = ['enemy', 'item__rarity', 'min_enemy_level']
     search_fields = ['enemy__name', 'item__name']
+
+
+# ==========================================
+# 🧙‍♂️ КВЕСТЫ И NPC
+# ==========================================
+
+# Инлайн для шагов квеста (добавляются прямо внутри квеста)
+class QuestObjectiveInline(admin.TabularInline):
+    model = QuestObjective
+    extra = 1 # Сколько пустых строк показывать по умолчанию
+
+# Инлайн для диалогов NPC (добавляются прямо внутри NPC)
+class DialogueOptionInline(admin.TabularInline):
+    model = DialogueOption
+    extra = 1
+
+@admin.register(NPC)
+class NPCAdmin(admin.ModelAdmin):
+    list_display = ['name', 'location', 'slug']
+    search_fields = ['name']
+    prepopulated_fields = {'slug': ('name',)}
+    inlines = [DialogueOptionInline]
+    fieldsets = (
+        ('Основное', {
+            'fields': ('name', 'slug', 'description', 'image_path', 'location')
+        }),
+        ('Диалоги', {
+            'fields': ('greeting_text', 'post_quest_dialogue'),
+            'description': 'Приветствие — когда только открыли диалог. Диалог после сдачи — когда сдали квест.'
+        }),
+    )
+
+
+@admin.register(Quest)
+class QuestAdmin(admin.ModelAdmin):
+    list_display = ['title', 'quest_line', 'order_in_line', 'giver_npc', 'required_level']
+    list_filter = ['quest_line', 'giver_npc', 'required_level']
+    search_fields = ['title', 'slug']
+    prepopulated_fields = {'slug': ('title',)}
+    inlines = [QuestObjectiveInline]
+    fieldsets = (
+        ('Основное', {
+            'fields': ('title', 'slug', 'description', 'giver_npc', 'turn_in_npc', 'required_level', 'is_repeatable')
+        }),
+        ('Награды', {
+            'fields': ('reward_exp', 'reward_gold', 'reward_item', 'reward_item_qty', 'reward_resource', 'reward_resource_qty', 'reward_vip_days')
+        }),
+    )
+
+@admin.register(PlayerQuest)
+class PlayerQuestAdmin(admin.ModelAdmin):
+    list_display = ['player', 'quest', 'status', 'started_at']
+    list_filter = ['status', 'quest']
+    search_fields = ['player__user__username', 'quest__title']

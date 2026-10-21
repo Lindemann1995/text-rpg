@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.utils import timezone
 
 
 class CharacterClass(models.Model):
@@ -35,6 +36,7 @@ class CharacterClass(models.Model):
     def __str__(self):
         return self.name
     
+
 class Player(models.Model):
     """Игровой профиль игрока"""
 
@@ -55,6 +57,8 @@ class Player(models.Model):
     level = models.IntegerField(default=1, verbose_name='Уровень')
     experience = models.IntegerField(default=0, verbose_name='Опыт')
     experience_to_next = models.IntegerField(default=100, verbose_name='Опыт до след. уровня')
+    last_offline_claim = models.DateTimeField(default=timezone.now, verbose_name='Время последнего сбора оффлайн-награды')
+    offline_gold_rate = models.IntegerField(default=10, verbose_name='Золота в час (оффлайн)')
 
     # Статы
     strength = models.IntegerField(default=10, verbose_name='Сила')
@@ -80,6 +84,18 @@ class Player(models.Model):
         verbose_name='Текущая сцена'
     )
 
+    ROLE_CHOICES = [
+        ('player', 'Игрок'),
+        ('vip', 'VIP'),
+        ('guild_leader', 'Лидер гильдии'),
+        ('admin', 'Администратор'),
+    ]
+    role = models.CharField(
+        max_length=20, 
+        choices=ROLE_CHOICES, 
+        default='player', 
+        verbose_name='Роль в чате'
+    )
     # Фракция.
     faction = models.CharField(
         max_length=20,
@@ -127,6 +143,7 @@ class Player(models.Model):
 
     def __str__(self):
         return f'{self.user.username} [{self.level} ур.]'
+
 
 class Scene(models.Model):
     """Сцена - один текстовый фрагмент игры с выбором"""
@@ -215,14 +232,12 @@ class Choice(models.Model):
         help_text='Чем меньше число, тем выше кнопка'
     )
     
-    # Условие для показа (временно не используется.).
     required_flag = models.CharField(
         max_length=100,
         blank=True,
         verbose_name='Требуемый флаг'
     )
 
-    # Что устанавливает этот выбор.
     set_flag = models.CharField(
         max_length=100,
         blank=True,
@@ -237,6 +252,7 @@ class Choice(models.Model):
 
     def __str__(self):
         return f'{self.text} → {self.next_scene.slug if self.next_scene else "конец"}'
+
 
 class Flag(models.Model):
     """Флаг — отметка о действии игрока в сюжете"""
@@ -297,7 +313,6 @@ class Item(models.Model):
         verbose_name='Название'
     )
 
-        # Эффект предмета
     effect_type = models.CharField(
         max_length=30,
         blank=True,
@@ -339,9 +354,7 @@ class Item(models.Model):
         verbose_name='Цена',
         help_text='В золоте'
     )
-    # В модель Item добавь:
 
-    # Для экипировки
     required_classes = models.ManyToManyField(
         CharacterClass,
         blank=True,
@@ -365,7 +378,12 @@ class Item(models.Model):
         ],
         verbose_name='Слот'
     )
-    # Бонусы к статам
+    image_path = models.CharField(
+        max_length=200, 
+        blank=True, 
+        verbose_name='Путь к картинке',
+        help_text='Например: items/rusty_sword.png (без assets/images/)'
+    )
     bonus_strength = models.IntegerField(default=0, verbose_name='+ Сила')
     bonus_agility = models.IntegerField(default=0, verbose_name='+ Ловкость')
     bonus_intelligence = models.IntegerField(default=0, verbose_name='+ Интеллект')
@@ -381,6 +399,7 @@ class Item(models.Model):
     
     def __str__(self):
         return f'{self.name} ({self.get_rarity_display()})'
+
 
 class Inventory(models.Model):
     """Предмет в инвентаре игрока"""
@@ -402,11 +421,6 @@ class Inventory(models.Model):
     )
     is_equipped = models.BooleanField(
         default=False,
-        verbose_name='Экипирован',
-        help_text='Только для оружия и брони'
-    )
-    is_equipped = models.BooleanField(
-        default=False,
         verbose_name='Экипирован'
     )
     
@@ -421,10 +435,10 @@ class Inventory(models.Model):
     def __str__(self):
         return f'{self.player.user.username}: {self.item.name} x{self.quantity}'
 
+
 class Location(models.Model):
     """Локация — регион на карте мира"""
     
-    # 1. Справочники (Choices) принято объявлять в самом начале класса
     LOCATION_TYPES = [
         ('farm', 'Фарм (Охота)'),
         ('trade', 'Торговая'),
@@ -432,13 +446,11 @@ class Location(models.Model):
         ('dungeon', 'Подземелье'),
     ]
     
-    # 2. Основные поля
     name = models.CharField(max_length=100, verbose_name='Название')
     slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
     description = models.TextField(blank=True, verbose_name='Описание')
     icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка')
     
-    # 3. Тип локации (добавили)
     location_type = models.CharField(
         max_length=20,
         choices=LOCATION_TYPES,
@@ -447,11 +459,9 @@ class Location(models.Model):
         help_text='Определяет, что откроется при входе в локацию'
     )
     
-    # 4. Настройки доступа и карты
     min_level = models.IntegerField(default=1, verbose_name='Мин. уровень')
     is_available = models.BooleanField(default=True, verbose_name='Доступна')
     
-    # 5. Позиция на карте
     map_x = models.IntegerField(default=0, verbose_name='X на карте')
     map_y = models.IntegerField(default=0, verbose_name='Y на карте')
     
@@ -461,7 +471,6 @@ class Location(models.Model):
         ordering = ['min_level']
     
     def __str__(self):
-        # Добавили отображение типа локации для удобства в админке
         return f'{self.name} (ур. {self.min_level}+) [{self.get_location_type_display()}]'
 
 
@@ -494,22 +503,37 @@ class Enemy(models.Model):
         null=True,
         blank=True
     )
+    flip_image = models.BooleanField(
+        default=False, 
+        verbose_name='Отразить картинку (смотрит влево)',
+        help_text='Включи, если враг смотрит не в ту сторону'
+    )
     
     level = models.IntegerField(default=1, verbose_name='Уровень')
     health = models.IntegerField(default=50, verbose_name='HP')
     attack = models.IntegerField(default=5, verbose_name='Атака')
     defense = models.IntegerField(default=0, verbose_name='Защита')
     
-    # Награды
     xp_reward = models.IntegerField(default=10, verbose_name='Опыт')
     gold_reward = models.IntegerField(default=5, verbose_name='Золото')
     
-    # Способности (для боссов)
     abilities = models.JSONField(
         default=dict,
         blank=True,
         verbose_name='Способности',
         help_text='Например: {"poison": true, "summon_wolves": 3}'
+    )
+    image_path = models.CharField(
+        max_length=200, 
+        blank=True, 
+        verbose_name='Путь к картинке',
+        help_text='Например: characters/enemies/dragon.png (без assets/images/)'
+    )
+    bg_image_path = models.CharField(
+        max_length=200, 
+        blank=True, 
+        verbose_name='Фон арены',
+        help_text='Например: ui/battle_forest.png'
     )
     
     class Meta:
@@ -519,6 +543,7 @@ class Enemy(models.Model):
     
     def __str__(self):
         return f'{self.name} (ур. {self.level})'
+
 
 class Combat(models.Model):
     """Активный бой игрока"""
@@ -560,7 +585,6 @@ class Combat(models.Model):
         help_text='История ходов'
     )
     
-    # Для боссов — сколько раз уже призывал, отравлял и т.д.
     boss_state = models.JSONField(default=dict, blank=True, verbose_name='Состояние босса')
     
     created_at = models.DateTimeField(auto_now_add=True)
@@ -573,6 +597,7 @@ class Combat(models.Model):
     
     def __str__(self):
         return f'{self.player.user.username} vs {self.enemy.name} ({self.status})'
+
 
 class Trader(models.Model):
     """Торговец в Мире Торговли"""
@@ -589,7 +614,6 @@ class Trader(models.Model):
         verbose_name='Локация'
     )
     
-    # Какие товары продаёт (ссылки на Item)
     items = models.ManyToManyField(
         Item,
         blank=True,
@@ -597,9 +621,7 @@ class Trader(models.Model):
         verbose_name='Товары'
     )
     
-    # Наценка (1.5 = +50%)
     markup = models.FloatField(default=1.0, verbose_name='Наценка')
-    
     is_active = models.BooleanField(default=True, verbose_name='Активен')
     
     class Meta:
@@ -608,6 +630,7 @@ class Trader(models.Model):
     
     def __str__(self):
         return f'{self.name} ({self.location.name})'
+
 
 class EquipmentSlot(models.Model):
     """Экипировка игрока — что надето"""
@@ -648,8 +671,9 @@ class EquipmentSlot(models.Model):
     def __str__(self):
         return f'{self.player.user.username} — {self.slot}: {self.item.name if self.item else "пусто"}'
     
+
 class EnemyLoot(models.Model):
-    """Настройка выпадения предметов с конкретного врага (с учетом уровня врага)"""
+    """Настройка выпадения предметов с конкретного врага"""
     
     enemy = models.ForeignKey(
         Enemy, 
@@ -663,7 +687,6 @@ class EnemyLoot(models.Model):
         verbose_name='Выпадающий предмет'
     )
     
-    # НОВЫЕ ПОЛЯ ДЛЯ ФИЛЬТРАЦИИ ПО УРОВНЮ МОБА
     min_enemy_level = models.IntegerField(
         default=1, 
         verbose_name='Мин. уровень моба'
@@ -689,3 +712,159 @@ class EnemyLoot(models.Model):
 
     def __str__(self):
         return f'{self.enemy.name} (Ур. {self.min_enemy_level}-{self.max_enemy_level}) -> {self.item.name} ({self.chance}%)'
+
+
+# ==========================================
+# 🧙‍♂️ СИСТЕМА NPC И ДИАЛОГОВ
+# ==========================================
+
+class NPC(models.Model):
+    name = models.CharField(max_length=100, verbose_name='Имя NPC')
+    slug = models.SlugField(unique=True, verbose_name='Slug (для кода)')
+    description = models.TextField(blank=True, verbose_name='Описание (для админки)')
+    image_path = models.CharField(max_length=200, blank=True, verbose_name='Путь к аватарке', help_text='Например: npc/blacksmith.png')
+    location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Локация')
+    
+    greeting_text = models.TextField(verbose_name='Приветствие', help_text='Текст, который NPC говорит при встрече')
+    post_quest_dialogue = models.TextField(
+        blank=True,
+        verbose_name='Диалог после сдачи квеста',
+        help_text='Что NPC скажет после того, как вы сдадите ему квест.'
+    )
+
+    class Meta:
+        verbose_name = 'NPC'
+        verbose_name_plural = 'NPC (Персонажи)'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class DialogueOption(models.Model):
+    """Варианты ответов в диалоге с NPC (включая выдачу квестов)"""
+    npc = models.ForeignKey(NPC, on_delete=models.CASCADE, related_name='dialogue_options', verbose_name='NPC')
+    text = models.CharField(max_length=200, verbose_name='Текст кнопки', help_text='Например: "Дай мне работу"')
+    response_text = models.TextField(verbose_name='Ответ NPC', help_text='Что NPC скажет после нажатия')
+    order = models.IntegerField(default=0, verbose_name='Порядок кнопок')
+    
+    gives_quest = models.ForeignKey('Quest', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Выдает квест')
+
+    class Meta:
+        verbose_name = 'Вариант диалога'
+        verbose_name_plural = 'Варианты диалогов'
+        ordering = ['order']
+
+
+# ==========================================
+# 📜 СИСТЕМА КВЕСТОВ (ВЕТКИ)
+# ==========================================
+
+class QuestLine(models.Model):
+    """Квестовая линия (ветка), объединяющая квесты в цепочку"""
+    title = models.CharField(max_length=200, verbose_name='Название линии', help_text='Например: Спасти деревню')
+    slug = models.SlugField(unique=True, verbose_name='Slug линии')
+    description = models.TextField(blank=True, verbose_name='Описание для себя')
+
+    class Meta:
+        verbose_name = 'Квестовая линия (Ветка)'
+        verbose_name_plural = 'Квестовые линии (Ветки)'
+
+    def __str__(self):
+        return self.title
+
+
+class Quest(models.Model):
+    title = models.CharField(max_length=200, verbose_name='Название квеста')
+    slug = models.SlugField(unique=True, verbose_name='Slug')
+    description = models.TextField(verbose_name='Описание задачи', help_text='Что нужно сделать игроку')
+    
+    # Привязка к NPC
+    giver_npc = models.ForeignKey(NPC, on_delete=models.SET_NULL, null=True, blank=True, related_name='quests_given', verbose_name='Кто выдает квест')
+    turn_in_npc = models.ForeignKey(NPC, on_delete=models.SET_NULL, null=True, blank=True, related_name='quests_turned_in', verbose_name='Кому сдавать', help_text='Оставь пустым, если сдает тому же, кто выдал')
+    
+    required_level = models.IntegerField(default=1, verbose_name='Мин. уровень')
+    is_repeatable = models.BooleanField(default=False, verbose_name='Можно повторять')
+    
+    # 🆕 ПРИВЯЗКА К ЛИНИИ (ВЕТКЕ)
+    quest_line = models.ForeignKey(
+        QuestLine, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='quests', 
+        verbose_name='Квестовая линия',
+        help_text='Если это часть сюжетной ветки, выбери её здесь.'
+    )
+    order_in_line = models.IntegerField(
+        default=1, 
+        verbose_name='Порядок в линии',
+        help_text='Шаг 1, Шаг 2 и т.д. Игра будет выдавать их по порядку.'
+    )
+    
+    # --- НАГРАДЫ ---
+    reward_exp = models.IntegerField(default=0, verbose_name='Награда: Опыт')
+    reward_gold = models.IntegerField(default=0, verbose_name='Награда: Золото')
+    reward_item = models.ForeignKey('Item', on_delete=models.SET_NULL, null=True, blank=True, related_name='quest_reward_items', verbose_name='Награда: Предмет')
+    reward_item_qty = models.IntegerField(default=1, verbose_name='Количество предметов')
+    reward_resource = models.ForeignKey('Item', on_delete=models.SET_NULL, null=True, blank=True, related_name='quest_reward_resources', verbose_name='Награда: Ресурс')
+    reward_resource_qty = models.IntegerField(default=1, verbose_name='Количество ресурсов')
+    reward_vip_days = models.IntegerField(default=0, verbose_name='Награда: VIP (дней)', help_text='0 = без VIP. 1 = на 1 день и т.д.')
+    
+    class Meta:
+        verbose_name = 'Квест'
+        verbose_name_plural = 'Квесты'
+        ordering = ['required_level']
+
+    def __str__(self):
+        if self.quest_line:
+            return f"[{self.quest_line.title}] Шаг {self.order_in_line}: {self.title}"
+        return self.title
+
+
+class QuestObjective(models.Model):
+    """Шаги квеста (убить X мобов, собрать Y предметов)"""
+    OBJECTIVE_TYPES = [
+        ('kill', 'Убить моба'),
+        ('collect', 'Собрать предмет'),
+    ]
+    
+    quest = models.ForeignKey(Quest, on_delete=models.CASCADE, related_name='objectives', verbose_name='Квест')
+    order = models.IntegerField(default=1, verbose_name='Порядок шага')
+    objective_type = models.CharField(max_length=20, choices=OBJECTIVE_TYPES, verbose_name='Тип задачи')
+    
+    target_enemy = models.ForeignKey('Enemy', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Цель (Моб)')
+    target_item = models.ForeignKey('Item', on_delete=models.SET_NULL, null=True, blank=True, verbose_name='Цель (Предмет)')
+    
+    required_count = models.IntegerField(default=1, verbose_name='Сколько нужно')
+
+    class Meta:
+        verbose_name = 'Шаг квеста'
+        verbose_name_plural = 'Шаги квестов'
+        ordering = ['quest', 'order']
+
+    def __str__(self):
+        return f'{self.quest.title} - Шаг {self.order}'
+
+
+class PlayerQuest(models.Model):
+    """Прогресс игрока по квесту"""
+    STATUSES = [
+        ('active', 'В процессе'),
+        ('ready', 'Готов к сдаче'),
+        ('completed', 'Завершен'),
+    ]
+    
+    player = models.ForeignKey('Player', on_delete=models.CASCADE, related_name='quests', verbose_name='Игрок')
+    quest = models.ForeignKey(Quest, on_delete=models.CASCADE, verbose_name='Квест')
+    status = models.CharField(max_length=20, choices=STATUSES, default='active', verbose_name='Статус')
+    
+    progress_data = models.JSONField(default=dict, verbose_name='Прогресс выполнения')
+    
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Квест игрока'
+        verbose_name_plural = 'Квесты игроков'
+        unique_together = [['player', 'quest']]
