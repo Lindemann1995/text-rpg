@@ -887,6 +887,7 @@ def player_unequip(request):
     
     item = eq.item
     
+    # Вычитаем бонусы от предмета
     player.strength -= item.bonus_strength
     player.agility -= item.bonus_agility
     player.intelligence -= item.bonus_intelligence
@@ -895,13 +896,31 @@ def player_unequip(request):
     player.max_health -= item.bonus_health
     player.max_mana -= item.bonus_mana
     
-    if player.strength < 1: player.strength = 1
-    if player.agility < 1: player.agility = 1
-    if player.intelligence < 1: player.intelligence = 1
-    if player.endurance < 1: player.endurance = 1
-    if player.sanity < 1: player.sanity = 1
-    if player.max_health < 1: player.max_health = 1
-    if player.max_mana < 1: player.max_mana = 1
+    # 🆕 ПРОВЕРКА: не падаем ниже базовых статов класса
+    if player.character_class:
+        if player.strength < player.character_class.base_strength: 
+            player.strength = player.character_class.base_strength
+        if player.agility < player.character_class.base_agility: 
+            player.agility = player.character_class.base_agility
+        if player.intelligence < player.character_class.base_intelligence: 
+            player.intelligence = player.character_class.base_intelligence
+        if player.endurance < player.character_class.base_endurance: 
+            player.endurance = player.character_class.base_endurance
+        if player.sanity < player.character_class.base_sanity: 
+            player.sanity = player.character_class.base_sanity
+    else:
+        # Если класса нет — ставим минимум 1
+        if player.strength < 1: player.strength = 1
+        if player.agility < 1: player.agility = 1
+        if player.intelligence < 1: player.intelligence = 1
+        if player.endurance < 1: player.endurance = 1
+        if player.sanity < 1: player.sanity = 1
+    
+    # HP и MP не могут быть больше максимума, и не могут быть меньше 1
+    if player.health > player.max_health: player.health = player.max_health
+    if player.mana > player.max_mana: player.mana = player.max_mana
+    if player.health < 1: player.health = 1
+    if player.mana < 1: player.mana = 1
     
     player.save()
     Inventory.objects.filter(player=player, item=item).update(is_equipped=False)
