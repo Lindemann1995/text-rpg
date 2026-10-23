@@ -5,8 +5,18 @@ import random
 from django.utils import timezone
 from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot, PlayerQuest
 
+
 def start_combat(player: Player, enemy: Enemy) -> Combat:
     """Начинает новый бой"""
+    # Применяем баффы HP/MP от гильдии (для теста временно меняем макс. значения)
+    from guilds.services import get_guild_bonuses
+    bonuses = get_guild_bonuses(player)
+    
+    if bonuses['hp_multiplier'] > 1.0 or bonuses['mp_multiplier'] > 1.0:
+        player.max_health = int(player.max_health * bonuses['hp_multiplier'])
+        player.max_mana = int(player.max_mana * bonuses['mp_multiplier'])
+        player.save()
+
     combat = Combat.objects.create(
         player=player,
         enemy=enemy,
@@ -29,7 +39,12 @@ def player_attack(combat: Combat) -> dict:
     player = combat.player
     enemy = combat.enemy
     
-    base_damage = max(1, player.strength - enemy.defense)
+    # Применяем бафф Алтаря силы
+    from guilds.services import get_guild_bonuses
+    bonuses = get_guild_bonuses(player)
+    effective_strength = int(player.strength * bonuses['strength_multiplier'])
+    
+    base_damage = max(1, effective_strength - enemy.defense)
     is_crit = random.random() < 0.15
     damage = int(base_damage * 1.5) if is_crit else base_damage
     
@@ -139,6 +154,10 @@ def player_flee(combat: Combat) -> dict:
 def _apply_rewards(player: Player, enemy: Enemy) -> list:
     dropped_items = []
     try:
+        # Применяем баффы гильдии (опыт и золото)
+        from guilds.services import get_guild_bonuses
+        bonuses = get_guild_bonuses(player)
+
         # 1. Награды за уровень
         level_diff = player.level - enemy.level
         xp_reward = enemy.xp_reward
@@ -150,6 +169,10 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
         elif level_diff <= -5:
             xp_reward = int(xp_reward * 1.5)
             gold_reward = int(gold_reward * 1.5)
+
+        # ПРИМЕНЯЕМ БАФФЫ
+        xp_reward = int(xp_reward * bonuses['xp_multiplier'])
+        gold_reward = int(gold_reward * bonuses['gold_multiplier'])
 
         player.experience += xp_reward
         player.gold += gold_reward
@@ -173,6 +196,9 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
                     penalty = (loc_level_diff - 5) * 10
                     drop_chance = max(0, drop_chance - penalty)
 
+            # ПРИМЕНЯЕМ БАФФ ЛУТА (Кузница)
+            drop_chance = int(drop_chance * bonuses['loot_multiplier'])
+
             roll = random.randint(1, 100)
             if roll <= drop_chance:
                 qty = random.randint(loot.quantity_min, loot.quantity_max)
@@ -190,14 +216,15 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
                     'name': loot.item.name,
                     'quantity': qty,
                     'rarity': loot.item.rarity,
+                    'item_type': loot.item.item_type, 
+                    'image_path': loot.item.image_path,
                     'bonus_strength': loot.item.bonus_strength,
                     'bonus_agility': loot.item.bonus_agility,
                     'bonus_intelligence': loot.item.bonus_intelligence,
                     'bonus_endurance': loot.item.bonus_endurance,
                     'bonus_health': loot.item.bonus_health,
                 })
-                print(f"=== УСПЕХ: {player.user.username} выбил {loot.item.name} (x{qty}) ===")
-
+        
         # 4. Повышение уровня
         while player.experience >= player.experience_to_next:
             player.experience -= player.experience_to_next

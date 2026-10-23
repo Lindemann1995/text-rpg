@@ -68,4 +68,10 @@ urlpatterns = [
     path('quests/accept/', AcceptQuestView.as_view(), name='accept_quest'),
     path('quests/complete/', CompleteQuestView.as_view(), name='complete_quest'),
     path('quests/all/', AllQuestsView.as_view(), name='all_quests'),
+
+    # 🛠 КРАФТ
+    path('npc/<slug:npc_slug>/recipes/', views.get_npc_recipes, name='get_npc_recipes'),
+    path('craft/learn/', views.learn_recipe, name='learn_recipe'),
+    path('craft/create/', views.craft_item, name='craft_item'),
+    path('craft/scrolls/', views.get_player_scrolls, name='player_scrolls'),
 ]

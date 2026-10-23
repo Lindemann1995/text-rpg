@@ -295,6 +295,7 @@ class Item(models.Model):
         ('armor', 'Броня'),
         ('potion', 'Зелье'),
         ('resource', 'Ресурс'),
+        ('recipe', 'Свиток (Рецепт)'),
         ('quest', 'Квестовый'),
         ('misc', 'Разное'),
     ]
@@ -383,6 +384,21 @@ class Item(models.Model):
         blank=True, 
         verbose_name='Путь к картинке',
         help_text='Например: items/rusty_sword.png (без assets/images/)'
+    )
+    # --- ПОЛЯ ДЛЯ РЕСУРСОВ (добавлено) ---
+    max_stack = models.IntegerField(
+        default=999, 
+        verbose_name='Макс. в стаке',
+        help_text='Сколько ресурсов может лежать в одной ячейке'
+    )
+    scroll_unlock = models.ForeignKey(
+        'self', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='unlocked_by_scroll',
+        verbose_name='Привязан к свитку',
+        help_text='Выбери свиток крафта. Если пусто — ресурс падает просто так.'
     )
     bonus_strength = models.IntegerField(default=0, verbose_name='+ Сила')
     bonus_agility = models.IntegerField(default=0, verbose_name='+ Ловкость')
@@ -868,3 +884,101 @@ class PlayerQuest(models.Model):
         verbose_name = 'Квест игрока'
         verbose_name_plural = 'Квесты игроков'
         unique_together = [['player', 'quest']]
+    
+
+# ==========================================
+# 🛠 СИСТЕМА КРАФТА
+# ==========================================
+
+class Recipe(models.Model):
+    """Рецепт крафта предмета"""
+    name = models.CharField(max_length=200, verbose_name='Название рецепта')
+    description = models.TextField(blank=True, verbose_name='Описание (что крафтим)')
+    
+    # Привязка к НПС (Коваль, Зельевар и т.д.)
+    npc = models.ForeignKey(
+        NPC, 
+        on_delete=models.CASCADE, 
+        related_name='recipes',
+        verbose_name='НПС (кто учит)',
+        null=True, blank=True
+    )
+    
+    # Что получится в итоге
+    result_item = models.ForeignKey(
+        Item, 
+        on_delete=models.CASCADE, 
+        related_name='crafted_by_recipes',
+        verbose_name='Результат крафта (Предмет)'
+    )
+    result_quantity = models.IntegerField(default=1, verbose_name='Количество на выходе')
+    
+    # Свиток, который нужен для изучения
+    scroll_item = models.ForeignKey(
+        Item, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='learns_recipes',
+        verbose_name='Свиток для изучения',
+        help_text='Выбери предмет-свиток (тип: Свиток), который откроет этот рецепт.'
+    )
+    
+    required_level = models.IntegerField(default=1, verbose_name='Требуемый уровень игрока')
+    gold_cost = models.IntegerField(default=0, verbose_name='Стоимость изучения (золото)')
+    
+    class Meta:
+        verbose_name = 'Рецепт (Крафт)'
+        verbose_name_plural = 'Рецепты (Крафт)'
+        ordering = ['required_level', 'name']
+
+    def __str__(self):
+        return f'{self.name} -> {self.result_item.name}'
+
+
+class RecipeIngredient(models.Model):
+    """Ингредиент для рецепта"""
+    recipe = models.ForeignKey(
+        Recipe, 
+        on_delete=models.CASCADE, 
+        related_name='ingredients',
+        verbose_name='Рецепт'
+    )
+    item = models.ForeignKey(
+        Item, 
+        on_delete=models.CASCADE, 
+        verbose_name='Необходимый предмет (Ресурс)'
+    )
+    quantity = models.IntegerField(default=1, verbose_name='Количество')
+
+    class Meta:
+        verbose_name = 'Ингредиент рецепта'
+        verbose_name_plural = 'Ингредиенты рецептов'
+        unique_together = [['recipe', 'item']]
+
+    def __str__(self):
+        return f'{self.recipe.name}: {self.item.name} x{self.quantity}'
+
+
+class PlayerRecipe(models.Model):
+    """Изученные рецепты игрока"""
+    player = models.ForeignKey(
+        Player, 
+        on_delete=models.CASCADE, 
+        related_name='learned_recipes',
+        verbose_name='Игрок'
+    )
+    recipe = models.ForeignKey(
+        Recipe, 
+        on_delete=models.CASCADE, 
+        verbose_name='Рецепт'
+    )
+    learned_at = models.DateTimeField(auto_now_add=True, verbose_name='Изучен')
+
+    class Meta:
+        verbose_name = 'Изученный рецепт'
+        verbose_name_plural = 'Изученные рецепты'
+        unique_together = [['player', 'recipe']]
+
+    def __str__(self):
+        return f'{self.player.user.username} изучил {self.recipe.name}'

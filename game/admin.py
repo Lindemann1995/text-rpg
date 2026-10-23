@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
     Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot, 
-    NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest
+    NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest, Recipe, RecipeIngredient, PlayerRecipe
 )
 
 
@@ -77,6 +77,12 @@ class ItemAdmin(admin.ModelAdmin):
         ('Экипировка', {
             'fields': ('equip_slot', 'required_classes', 'required_level'),
             'classes': ('collapse',),
+        }),
+        # --- НОВЫЙ БЛОК ДЛЯ РЕСУРСОВ ---
+        ('Настройки ресурса', {
+            'fields': ('max_stack', 'scroll_unlock'),
+            'classes': ('collapse',),
+            'description': 'Заполняйте эти поля, если тип предмета = "Ресурс"'
         }),
     )
 
@@ -197,3 +203,39 @@ class PlayerQuestAdmin(admin.ModelAdmin):
     list_display = ['player', 'quest', 'status', 'started_at']
     list_filter = ['status', 'quest']
     search_fields = ['player__user__username', 'quest__title']
+
+# ==========================================
+# 🛠 АДМИНКА КРАФТА
+# ==========================================
+
+# Инлайн для ингредиентов (добавляются прямо внутри рецепта)
+class RecipeIngredientInline(admin.TabularInline):
+    model = RecipeIngredient
+    extra = 1
+    autocomplete_fields = ['item'] # Удобный поиск предметов
+
+@admin.register(Recipe)
+class RecipeAdmin(admin.ModelAdmin):
+    list_display = ['name', 'result_item', 'npc', 'required_level', 'gold_cost']
+    list_filter = ['npc', 'required_level']
+    search_fields = ['name', 'result_item__name']
+    inlines = [RecipeIngredientInline] # Добавляем ингредиенты прямо на странице рецепта
+    autocomplete_fields = ['result_item', 'scroll_item']
+    fieldsets = (
+        ('Основное', {
+            'fields': ('name', 'description', 'npc')
+        }),
+        ('Результат крафта', {
+            'fields': ('result_item', 'result_quantity')
+        }),
+        ('Изучение', {
+            'fields': ('scroll_item', 'required_level', 'gold_cost'),
+            'description': 'Свиток, который нужен для изучения, и условия.'
+        }),
+    )
+
+@admin.register(PlayerRecipe)
+class PlayerRecipeAdmin(admin.ModelAdmin):
+    list_display = ['player', 'recipe', 'learned_at']
+    list_filter = ['recipe']
+    search_fields = ['player__user__username', 'recipe__name']

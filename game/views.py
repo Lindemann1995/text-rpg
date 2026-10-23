@@ -15,8 +15,7 @@ from .models import (
     Scene, Player, CharacterClass, Choice, Flag,
     Location, Enemy, Combat, Item, Inventory,
     Trader, EquipmentSlot, 
-    # 🆕 ИМПОРТЫ ДЛЯ КВЕСТОВ
-    NPC, Quest, PlayerQuest, QuestLine
+    NPC, Quest, PlayerQuest, QuestLine, Recipe, RecipeIngredient, PlayerRecipe
 )
 from .serializers import (
     RegisterSerializer, PlayerSerializer, CharacterClassSerializer,
@@ -395,12 +394,33 @@ def get_locations(request):
     result = []
     for loc in locations:
         enemies = loc.enemies.filter(enemy_type='normal')
-        enemies_data = [{
-            'slug': e.slug,
-            'name': e.name,
-            'level': e.level,
-            'icon': e.icon
-        } for e in enemies]
+        enemies_data = []
+        for e in enemies:
+            # Собираем лут для моба
+            loot_list = []
+            for loot in e.loot_table.all():
+                # Берем только те предметы, чей шанс > 0 (чтобы не показывать "мусор")
+                if loot.chance > 0:
+                    loot_list.append({
+                        'slug': loot.item.slug,
+                        'name': loot.item.name,
+                        'image_path': loot.item.image_path,
+                        'rarity': loot.item.rarity,
+                    })
+
+            enemies_data.append({
+                'slug': e.slug,
+                'name': e.name,
+                'level': e.level,
+                'health': e.health,
+                'attack': e.attack,
+                'defense': e.defense,
+                'description': e.description,
+                'image_path': e.image_path,
+                'xp_reward': e.xp_reward,
+                'gold_reward': e.gold_reward,
+                'loot': loot_list,
+            })
 
         result.append({
             'id': loc.id,
@@ -1175,3 +1195,238 @@ class CompleteQuestView(APIView):
             'gold': quest.reward_gold,
             'dropped_items': dropped_items  # <-- ВОТ ЭТО ГЛАВНОЕ
         })
+    
+# ==========================================
+# 🛠 API ДЛЯ КРАФТА
+# ==========================================
+
+@api_view(['GET'])
+def get_npc_recipes(request, npc_slug):
+    """Получить список изученных рецептов у конкретного NPC"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    try:
+        npc = NPC.objects.get(slug=npc_slug)
+    except NPC.DoesNotExist:
+        return Response({'error': 'NPC не найден'}, status=404)
+
+    # Проверка уровня
+    if player.level < 7:
+        return Response({
+            'error': 'Достигните 7 уровня, чтобы крафтить предметы.',
+            'required_level': 7,
+            'player_level': player.level
+        }, status=403)
+
+    # Получаем ТОЛЬКО те рецепты, которые игрок ИЗУЧИЛ (есть в PlayerRecipe)
+    learned_recipes = PlayerRecipe.objects.filter(
+        player=player, 
+        recipe__npc=npc
+    ).select_related('recipe', 'recipe__result_item')
+
+    recipes_data = []
+    for pr in learned_recipes:
+        recipe = pr.recipe
+        result_item = recipe.result_item
+        
+        # Собираем ингредиенты
+        ingredients = []
+        for ing in recipe.ingredients.all():
+            # Проверяем, сколько есть у игрока
+            inv = Inventory.objects.filter(player=player, item=ing.item).first()
+            has_qty = inv.quantity if inv else 0
+            
+            ingredients.append({
+                'slug': ing.item.slug,
+                'name': ing.item.name,
+                'image_path': ing.item.image_path,
+                'required': ing.quantity,
+                'has': has_qty
+            })
+
+        recipes_data.append({
+            'id': recipe.id,
+            'name': recipe.name,
+            'description': recipe.description,
+            'result_item': {
+                'slug': result_item.slug,
+                'name': result_item.name,
+                'image_path': result_item.image_path,
+                'rarity': result_item.rarity,
+                'bonus_strength': result_item.bonus_strength,
+                'bonus_agility': result_item.bonus_agility,
+            },
+            'ingredients': ingredients
+        })
+
+    return Response({'recipes': recipes_data})
+
+@api_view(['POST'])
+def learn_recipe(request):
+    """Изучение рецепта из свитка"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    if player.level < 7:
+        return Response({'error': 'Достигните 7 уровня, чтобы изучать рецепты.'}, status=403)
+
+    scroll_slug = request.data.get('scroll_slug')
+    if not scroll_slug:
+        return Response({'error': 'Не указан scroll_slug'}, status=400)
+
+    # Ищем рецепт по свитку
+    try:
+        recipe = Recipe.objects.get(scroll_item__slug=scroll_slug)
+    except Recipe.DoesNotExist:
+        return Response({'error': 'Этот свиток не открывает никаких рецептов'}, status=404)
+
+    # Проверяем, не изучен ли уже
+    if PlayerRecipe.objects.filter(player=player, recipe=recipe).exists():
+        return Response({'error': 'Этот рецепт уже изучен'}, status=400)
+
+    # Проверяем наличие свитка в инвентаре
+    try:
+        inv = Inventory.objects.get(player=player, item=recipe.scroll_item)
+    except Inventory.DoesNotExist:
+        return Response({'error': 'У вас нет этого свитка'}, status=400)
+    if inv.quantity <= 0:
+        return Response({'error': 'У вас нет этого свитка'}, status=400)
+
+    # Проверяем золото (если требуется)
+    if player.gold < recipe.gold_cost:
+        return Response({'error': f'Не хватает золота. Нужно: {recipe.gold_cost}'}, status=400)
+
+    # --- ВСЕ ОК, СПИСЫВАЕМ ---
+    player.gold -= recipe.gold_cost
+    
+    inv.quantity -= 1
+    if inv.quantity <= 0:
+        inv.delete()
+    else:
+        inv.save()
+
+    player.save()
+
+    # Добавляем рецепт в изученные
+    PlayerRecipe.objects.create(player=player, recipe=recipe)
+
+    return Response({
+        'success': True,
+        'message': f'Рецепт "{recipe.name}" изучен!',
+        'recipe_id': recipe.id
+    })
+
+
+@api_view(['POST'])
+def craft_item(request):
+    """Скрафтить предмет по рецепту"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    recipe_id = request.data.get('recipe_id')
+    if not recipe_id:
+        return Response({'error': 'Не указан recipe_id'}, status=400)
+
+    try:
+        recipe = Recipe.objects.get(id=recipe_id)
+    except Recipe.DoesNotExist:
+        return Response({'error': 'Рецепт не найден'}, status=404)
+
+    # Проверяем, изучен ли рецепт
+    player_recipe = PlayerRecipe.objects.filter(player=player, recipe=recipe).first()
+    if not player_recipe:
+        return Response({'error': 'Вы не изучили этот рецепт'}, status=403)
+
+    # Проверяем уровень
+    if player.level < recipe.required_level:
+        return Response({'error': f'Нужен {recipe.required_level} уровень'}, status=400)
+
+    # Проверяем наличие ВСЕХ ингредиентов
+    missing_ingredients = []
+    for ing in recipe.ingredients.all():
+        inv = Inventory.objects.filter(player=player, item=ing.item).first()
+        has_qty = inv.quantity if inv else 0
+        if has_qty < ing.quantity:
+            missing_ingredients.append(f'{ing.item.name} (нужно {ing.quantity}, есть {has_qty})')
+
+    if missing_ingredients:
+        return Response({
+            'error': 'Не хватает ресурсов: ' + ', '.join(missing_ingredients)
+        }, status=400)
+
+    # --- ВСЕ ОК, СПИСЫВАЕМ РЕСУРСЫ ---
+    for ing in recipe.ingredients.all():
+        inv = Inventory.objects.get(player=player, item=ing.item)
+        inv.quantity -= ing.quantity
+        if inv.quantity <= 0:
+            inv.delete()
+        else:
+            inv.save()
+
+    # Выдаем предмет
+    result_inv, created = Inventory.objects.get_or_create(
+        player=player, item=recipe.result_item, defaults={'quantity': 0}
+    )
+    result_inv.quantity += recipe.result_quantity
+    result_inv.save()
+
+    # 🆕 УДАЛЯЕМ ИЗУЧЕННЫЙ РЕЦЕПТ (он "сгорает")
+    player_recipe.delete()
+
+    return Response({
+        'success': True,
+        'message': f'Вы создали: {recipe.result_item.name} x{recipe.result_quantity}',
+        'item': {
+            'slug': recipe.result_item.slug,
+            'name': recipe.result_item.name,
+            'image_path': recipe.result_item.image_path,
+            'rarity': recipe.result_item.rarity,
+            'quantity': recipe.result_quantity,
+        }
+    })
+
+
+@api_view(['GET'])
+def get_player_scrolls(request):
+    """Получить список свитков (рецептов) в инвентаре игрока"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    # Ищем в инвентаре предметы, у которых есть привязанный рецепт
+    # (то есть те, которые открывают крафт)
+    scrolls = Inventory.objects.filter(
+        player=player, 
+        item__learns_recipes__isnull=False # <--- Связь с нашей моделью Recipe
+    ).select_related('item')
+
+    result = []
+    for inv in scrolls:
+        item = inv.item
+        # Получаем сам рецепт, который открывает этот свиток
+        recipe = item.learns_recipes.first() 
+        
+        # Проверяем, не изучен ли он уже
+        is_learned = PlayerRecipe.objects.filter(player=player, recipe=recipe).exists()
+
+        result.append({
+            'slug': item.slug,
+            'name': item.name,
+            'description': item.description,
+            'image_path': item.image_path,
+            'rarity': item.rarity,
+            'quantity': inv.quantity,
+            'recipe_name': recipe.name if recipe else 'Неизвестный рецепт',
+            'recipe_id': recipe.id if recipe else None,
+            'is_learned': is_learned,
+        })
+
+    return Response({'scrolls': result})
