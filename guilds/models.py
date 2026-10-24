@@ -30,6 +30,8 @@ class Guild(models.Model):
     banner_preset = models.CharField(max_length=50, blank=True, verbose_name='Штандарт')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создана')
 
+    daily_streak = models.IntegerField(default=0, verbose_name='Серия ежедневок')
+    last_daily_completed_date = models.DateField(null=True, blank=True, verbose_name='Дата последней серии')
     class Meta:
         verbose_name = 'Гильдия'
         verbose_name_plural = 'Гильдии'
@@ -206,3 +208,283 @@ class GuildUpgrade(models.Model):
 
     def __str__(self):
         return f'{self.guild.tag}: {self.template.name} ур.{self.level}'
+
+
+class Castle(models.Model):
+    """Замок на карте мира."""
+    name = models.CharField(max_length=100, verbose_name='Название замка')
+    slug = models.SlugField(max_length=100, unique=True, verbose_name='Слаг (для кода)')
+    description = models.TextField(blank=True, verbose_name='Описание')
+    
+    # Визуал
+    image_path = models.CharField(
+        max_length=200, 
+        blank=True, 
+        verbose_name='Путь к картинке',
+        help_text='Например: map/castle_dark.png (без assets/images/)'
+    )
+    
+    # Координаты для карты (в процентах от 0.0 до 1.0)
+    map_x = models.FloatField(default=0.5, verbose_name='X на карте (0.0 - 1.0)')
+    map_y = models.FloatField(default=0.5, verbose_name='Y на карте (0.0 - 1.0)')
+    
+    # Владелец
+    owner = models.ForeignKey(
+        Guild, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='castles',
+        verbose_name='Владелец'
+    )
+    
+    # Экономика
+    daily_tax = models.IntegerField(default=2000, verbose_name='Ежедневный налог (золото)')
+    passive_income = models.IntegerField(default=1500, verbose_name='Пассивный доход (золото/день)')
+    defense_level = models.IntegerField(default=1, verbose_name='Уровень защиты (гарнизон НПС)')
+    
+    # Баффы владельцу
+    buff_xp_percent = models.IntegerField(default=10, verbose_name='Бафф: % к опыту')
+    buff_gold_percent = models.IntegerField(default=10, verbose_name='Бафф: % к золоту')
+
+    last_tax_collected = models.DateTimeField(null=True, blank=True, verbose_name='Последний сбор налогов')
+    debt_deadline = models.DateTimeField(null=True, blank=True, verbose_name='Дедлайн по долгу')
+    siege_cooldown_until = models.DateTimeField(null=True, blank=True, verbose_name='КД на осаду до')
+
+    class Meta:
+        verbose_name = 'Замок'
+        verbose_name_plural = 'Замки'
+        ordering = ['name']
+
+    def __str__(self):
+        status = f'[{self.owner.tag}]' if self.owner else '[Свободен]'
+        return f'{status} {self.name}'
+
+
+class CastleSiege(models.Model):
+    """Активная осада замка (инстанс)."""
+    STATUSES = [
+        ('active', 'Активна'),
+        ('won', 'Победа атакующих'),
+        ('lost', 'Победа защитников'),
+    ]
+    
+    castle = models.ForeignKey(Castle, on_delete=models.CASCADE, related_name='sieges', verbose_name='Замок')
+    attacker_guild = models.ForeignKey(Guild, on_delete=models.CASCADE, related_name='attacks', verbose_name='Атакующая гильдия')
+    defender_guild = models.ForeignKey(Guild, on_delete=models.SET_NULL, null=True, blank=True, related_name='defenses', verbose_name='Защищающаяся гильдия')
+    
+    status = models.CharField(max_length=20, choices=STATUSES, default='active', verbose_name='Статус')
+    
+    # Состояние боя
+    current_enemy_index = models.IntegerField(default=0, verbose_name='Индекс текущего врага')
+    player_hp = models.IntegerField(default=0, verbose_name='HP игрока в осаде')
+    log = models.JSONField(default=list, blank=True, verbose_name='Лог боя')
+    
+    started_at = models.DateTimeField(auto_now_add=True, verbose_name='Начало')
+    finished_at = models.DateTimeField(null=True, blank=True, verbose_name='Конец')
+
+    class Meta:
+        verbose_name = 'Осада замка'
+        verbose_name_plural = 'Осады замков'
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f'{self.attacker_guild.tag} → {self.castle.name} ({self.status})'
+
+
+class SiegeEnemy(models.Model):
+    """НПС-защитник в осаде."""
+    siege = models.ForeignKey(CastleSiege, on_delete=models.CASCADE, related_name='enemies', verbose_name='Осада')
+    name = models.CharField(max_length=100, verbose_name='Имя')
+    health = models.IntegerField(verbose_name='HP')
+    max_health = models.IntegerField(verbose_name='Макс. HP')
+    attack = models.IntegerField(verbose_name='Атака')
+    defense = models.IntegerField(verbose_name='Защита')
+    is_dead = models.BooleanField(default=False, verbose_name='Убит')
+
+    class Meta:
+        verbose_name = 'Защитник осады'
+        verbose_name_plural = 'Защитники осады'
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.name} (HP: {self.health}/{self.max_health})'
+
+class GuildUISettings(models.Model):
+    """Настройки визуала гильдии (иконки для кнопок)."""
+    name = models.CharField(max_length=50, default='Настройки UI', verbose_name='Название')
+    
+    # Иконки для кнопок (пути к картинкам)
+    icon_taxes = models.CharField(
+        max_length=200, 
+        default='ui/icons/taxes.png', 
+        verbose_name='Иконка "Налоги"',
+        help_text='Например: ui/icons/taxes.png'
+    )
+    icon_bank = models.CharField(
+        max_length=200, 
+        default='ui/icons/bank.png', 
+        verbose_name='Иконка "Банк"',
+        help_text='Например: ui/icons/bank.png'
+    )
+    icon_war = models.CharField(
+        max_length=200, 
+        default='ui/icons/war.png', 
+        verbose_name='Иконка "Кузня"',
+        help_text='Например: ui/icons/war.png'
+    )
+    icon_members = models.CharField(
+        max_length=200, 
+        default='ui/icons/members.png', 
+        verbose_name='Иконка "Состав"',
+        help_text='Например: ui/icons/members.png'
+    )
+    icon_chat = models.CharField(
+        max_length=200, 
+        default='ui/icons/chat.png', 
+        verbose_name='Иконка "Чат"',
+        help_text='Например: ui/icons/chat.png'
+    )
+    icon_castle = models.CharField(
+        max_length=200, 
+        default='ui/icons/castle.png', 
+        verbose_name='Иконка "Замки"',
+        help_text='Например: ui/icons/castle.png'
+    )
+    icon_applications = models.CharField(
+        max_length=200, 
+        default='ui/icons/applications.png', 
+        verbose_name='Иконка "Заявки"',
+        help_text='Например: ui/icons/applications.png'
+    )
+
+    class Meta:
+        verbose_name = 'Настройки UI гильдии'
+        verbose_name_plural = 'Настройки UI гильдий'
+
+    def __str__(self):
+        return self.name
+    
+class Duel(models.Model):
+    """PvP-дуэль между двумя игроками."""
+    STATUSES = [
+        ('pending', 'Ожидание'),
+        ('active', 'Активна'),
+        ('finished', 'Завершена'),
+        ('declined', 'Отклонена'),
+    ]
+    
+    challenger = models.ForeignKey(
+        Player, 
+        on_delete=models.CASCADE, 
+        related_name='duels_challenged',
+        verbose_name='Вызывающий'
+    )
+    opponent = models.ForeignKey(
+        Player, 
+        on_delete=models.CASCADE, 
+        related_name='duels_received',
+        verbose_name='Противник'
+    )
+    
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUSES, 
+        default='pending',
+        verbose_name='Статус'
+    )
+    
+    # Состояние боя
+    challenger_hp = models.IntegerField(default=100, verbose_name='HP вызывающего')
+    opponent_hp = models.IntegerField(default=100, verbose_name='HP противника')
+    turn = models.IntegerField(default=1, verbose_name='Ход')
+    current_turn = models.CharField(
+        max_length=20, 
+        choices=[('challenger', 'Вызывающий'), ('opponent', 'Противник')],
+        default='challenger',
+        verbose_name='Чей ход'
+    )
+    log = models.JSONField(default=list, blank=True, verbose_name='Лог боя')
+    
+    winner = models.ForeignKey(
+        Player, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='duels_won',
+        verbose_name='Победитель'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создана')
+    finished_at = models.DateTimeField(null=True, blank=True, verbose_name='Завершена')
+
+    class Meta:
+        verbose_name = 'PvP Дуэль'
+        verbose_name_plural = 'PvP Дуэли'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.challenger.user.username} vs {self.opponent.user.username} ({self.status})'
+
+class GuildDailyQuestTemplate(models.Model):
+    """Шаблон ежедневного гильдейского квеста (создается в админке)"""
+    title = models.CharField(max_length=200, verbose_name='Название квеста')
+    description = models.TextField(verbose_name='Описание')
+    image_path = models.CharField(
+        max_length=200, blank=True, verbose_name='Путь к картинке',
+        help_text='Например: quests/daily_wolves.png'
+    )
+    target_enemy = models.ForeignKey(
+        'game.Enemy', on_delete=models.CASCADE, 
+        verbose_name='Какого моба бить'
+    )
+    required_count = models.IntegerField(default=50, verbose_name='Сколько нужно убить')
+    
+    # Награды
+    reward_gold_player = models.IntegerField(default=100, verbose_name='Золото каждому сдавшему')
+    reward_gold_treasury = models.IntegerField(default=500, verbose_name='Золото в казну гильдии')
+    reward_exp = models.IntegerField(default=100, verbose_name='Опыт игроку')
+    
+    difficulty = models.IntegerField(default=1, verbose_name='Сложность (1-10)')
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+
+    class Meta:
+        verbose_name = 'Шаблон ежедневки гильдии'
+        verbose_name_plural = 'Шаблоны ежедневок гильдии'
+        ordering = ['-difficulty']
+
+    def __str__(self):
+        return f'{self.title} ({self.target_enemy.name} x{self.required_count})'
+
+
+class GuildDailyQuest(models.Model):
+    """Конкретный квест на сегодня для конкретной гильдии"""
+    guild = models.ForeignKey(Guild, on_delete=models.CASCADE, related_name='daily_quests', verbose_name='Гильдия')
+    template = models.ForeignKey(GuildDailyQuestTemplate, on_delete=models.CASCADE, verbose_name='Шаблон')
+    date = models.DateField(verbose_name='Дата')
+    
+    progress = models.IntegerField(default=0, verbose_name='Общий прогресс')
+    is_completed = models.BooleanField(default=False, verbose_name='Выполнен')
+    completed_at = models.DateTimeField(null=True, blank=True, verbose_name='Когда выполнен')
+
+    class Meta:
+        verbose_name = 'Ежедневка гильдии'
+        verbose_name_plural = 'Ежедневки гильдий'
+        unique_together = [['guild', 'template', 'date']]
+        ordering = ['date', 'template']
+
+    def __str__(self):
+        return f'[{self.guild.tag}] {self.template.title} ({self.progress}/{self.template.required_count})'
+
+
+class GuildDailyQuestContribution(models.Model):
+    """Личный вклад игрока в ежедневку"""
+    daily_quest = models.ForeignKey(GuildDailyQuest, on_delete=models.CASCADE, related_name='contributions', verbose_name='Ежедневка')
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, verbose_name='Игрок')
+    kills = models.IntegerField(default=0, verbose_name='Убийств')
+    is_claimed = models.BooleanField(default=False, verbose_name='Награда получена')
+
+    class Meta:
+        verbose_name = 'Вклад в ежедневку'
+        verbose_name_plural = 'Вклады в ежедневки'
+        unique_together = [['daily_quest', 'player']]

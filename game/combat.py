@@ -70,7 +70,12 @@ def player_attack(combat: Combat) -> dict:
         
         # 🆕 ОБНОВЛЯЕМ ПРОГРЕСС КВЕСТОВ
         _update_kill_quests(player, enemy)
-        
+        # 🆕 ОБНОВЛЯЕМ ПРОГРЕСС ЕЖЕДНЕВОК ГИЛЬДИИ
+        try:
+            from guilds.services import check_daily_quest_progress
+            check_daily_quest_progress(player, enemy)
+        except Exception as e:
+            print(f"Ошибка при обновлении ежедневок: {e}")
         # Сохраняем лут в бой (чтобы Flutter мог его прочитать)
         combat.boss_state = {'dropped_items': dropped_items}
         combat.save()

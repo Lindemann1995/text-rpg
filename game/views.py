@@ -174,11 +174,13 @@ def me(request):
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
     
+    # 🆕 Обновляем время последней активности (чтобы работал онлайн-статус)
+    player.save() 
+    
     apply_regen(player)
     
     serializer = PlayerSerializer(player)
     return Response(serializer.data)
-
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -383,23 +385,32 @@ def combat_state(request, combat_id):
 
 @api_view(['GET'])
 def get_locations(request):
-    """Список всех доступных локаций с их врагами"""
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    locations = Location.objects.filter(is_available=True).order_by('min_level')
+    from guilds.services import get_guild
+    player_guild = get_guild(player)
+
+    # Показываем обычные локации + гильдейские, если игрок в этой гильдии
+    locations = Location.objects.filter(is_available=True).filter(
+        Q(is_guild_only=False) | Q(is_guild_only=True, guild=player_guild)
+    ).order_by('min_level')
     
     result = []
     for loc in locations:
+        # 1. Берем мобов локации
         enemies = loc.enemies.filter(enemy_type='normal')
+        
+        # 2. Если своих нет — берем глобальных (у которых location=None)
+     # 🆕 Берем глобальных мобов ТОЛЬКО если это гильдейская локация
+        if not enemies.exists() and loc.is_guild_only:
+            enemies = Enemy.objects.filter(location__isnull=True, enemy_type='normal')
         enemies_data = []
         for e in enemies:
-            # Собираем лут для моба
             loot_list = []
             for loot in e.loot_table.all():
-                # Берем только те предметы, чей шанс > 0 (чтобы не показывать "мусор")
                 if loot.chance > 0:
                     loot_list.append({
                         'slug': loot.item.slug,
@@ -436,15 +447,17 @@ def get_locations(request):
 
 @api_view(['POST'])
 def location_hunt(request, slug):
-    """Случайный враг из локации (не босс)"""
     import random
-    
     try:
         location = Location.objects.get(slug=slug)
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
     
     enemies = list(location.enemies.filter(enemy_type='normal'))
+    
+    # 🆕 Берем глобальных мобов ТОЛЬКО если это гильдейская локация
+    if not enemies and location.is_guild_only:
+        enemies = list(Enemy.objects.filter(location__isnull=True, enemy_type='normal'))
     
     if not enemies:
         return Response({'error': 'В этой локации нет врагов'}, status=404)

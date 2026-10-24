@@ -96,10 +96,24 @@ class InventoryAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'slug', 'min_level', 'is_available']
-    list_filter = ['is_available', 'min_level']
+    list_display = ['name', 'slug', 'min_level', 'is_available', 'is_guild_only'] # <--- добавили в список
+    list_filter = ['is_available', 'is_guild_only', 'min_level'] # <--- добавили фильтр
     search_fields = ['name', 'slug']
     prepopulated_fields = {'slug': ('name',)}
+    
+    # 🆕 Добавляем поля в форму редактирования
+    fieldsets = (
+        ('Основное', {
+            'fields': ('name', 'slug', 'description', 'icon', 'location_type', 'min_level', 'is_available')
+        }),
+        ('Карта', {
+            'fields': ('map_x', 'map_y')
+        }),
+        ('Доступ (Гильдия)', {
+            'fields': ('is_guild_only', 'guild'),
+            'description': 'Если поставить галочку "Только для гильдии", локацию увидит только выбранная ниже гильдия.'
+        }),
+    )
 
 
 @admin.register(Enemy)

@@ -9,10 +9,13 @@ class GuildMemberSerializer(serializers.ModelSerializer):
     level = serializers.IntegerField(source='player.level', read_only=True)
     rank_color = serializers.CharField(read_only=True)
     rank_display = serializers.CharField(source='get_rank_display', read_only=True)
+    
+    # 🆕 ДОБАВЛЯЕМ ЭТО ПОЛЕ
+    player_id = serializers.IntegerField(source='player.id', read_only=True)
 
     class Meta:
         model = GuildMember
-        fields = ['id', 'username', 'level', 'rank', 'rank_display', 'rank_color',
+        fields = ['id', 'player_id', 'username', 'level', 'rank', 'rank_display', 'rank_color',
                   'joined_at', 'contributed_gold']
 
 

@@ -135,6 +135,7 @@ class Player(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Обновлён')
     enemies_killed = models.IntegerField(default=0, verbose_name='Убито врагов')
+    last_seen = models.DateTimeField(auto_now=True, verbose_name='Последняя активность')
     
     class Meta:
         verbose_name = 'Игрок'
@@ -480,7 +481,15 @@ class Location(models.Model):
     
     map_x = models.IntegerField(default=0, verbose_name='X на карте')
     map_y = models.IntegerField(default=0, verbose_name='Y на карте')
+    map_x = models.IntegerField(default=0, verbose_name='X на карте')
+    map_y = models.IntegerField(default=0, verbose_name='Y на карте')
     
+    # 🆕 ДОБАВЬ ЭТИ ДВЕ СТРОЧКИ В КОНЕЦ КЛАССА:
+    is_guild_only = models.BooleanField(default=False, verbose_name='Только для гильдии')
+    guild = models.ForeignKey(
+        'guilds.Guild', on_delete=models.SET_NULL, null=True, blank=True, 
+        related_name='locations', verbose_name='Гильдия (если закрытая)'
+    )
     class Meta:
         verbose_name = 'Локация'
         verbose_name_plural = 'Локации'

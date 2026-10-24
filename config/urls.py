@@ -16,5 +16,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/health/', health),
     path('api/game/', include('game.urls')),
-    path('api/guilds/', include('guilds.urls')), 
+    path('api/guilds/', include('guilds.urls')),
+    path('api/social/', include('social.urls')),
 ]

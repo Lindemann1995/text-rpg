@@ -9,7 +9,7 @@ load_dotenv(BASE_DIR / '.env')
 
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
+ALLOWED_HOSTS = ['*']
 
 CSRF_TRUSTED_ORIGINS = [
     'https://dev.api.code-nest.ru',
@@ -31,6 +31,7 @@ INSTALLED_APPS = [
 
     'game',
     'guilds',
+    'social',
 ]
 
 MIDDLEWARE = [

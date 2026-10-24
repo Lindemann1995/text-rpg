@@ -2,6 +2,7 @@ import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import Player
+from social.models import GlobalChatMessage # 🆕 Импортируем модель чата
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -14,13 +15,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data):
         data = json.loads(text_data)
-        message = data['message']
-        username = data['username']
+        message = data.get('message')
+        username = data.get('username')
         
-        # Получаем роль игрока из БД
+        if not message or not username:
+            return
+
+        # 1. Получаем роль игрока из БД
         role = await self.get_user_role(username)
 
-        # Отправляем сообщение всем в группу
+        # 2. 🆕 СОХРАНЯЕМ СООБЩЕНИЕ В БД
+        await self.save_message(username, message)
+
+        # 3. Отправляем сообщение всем в группу
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -45,3 +52,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return player.role
         except Player.DoesNotExist:
             return 'player'
+
+    # 🆕 НОВЫЙ МЕТОД ДЛЯ СОХРАНЕНИЯ
+    @database_sync_to_async
+    def save_message(self, username, message_text):
+        try:
+            player = Player.objects.get(user__username=username)
+            GlobalChatMessage.objects.create(player=player, message=message_text)
+        except Player.DoesNotExist:
+            print(f"Ошибка: игрок {username} не найден при сохранении сообщения")

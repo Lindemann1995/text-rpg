@@ -1,15 +1,19 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-
+from django.db.models import Q
 from . import services
+from django.utils import timezone
 from .models import (
-    Guild, GuildMember, GuildApplication, GuildLog, GuildChatMessage, GuildBankItem, GuildBankLog,
+    Guild, GuildMember, GuildApplication, GuildLog,
+    GuildChatMessage, GuildUpgrade, GuildUpgradeTemplate,
+    GuildUpgradeLevelCost, GuildUISettings, Duel,
+    GuildDailyQuest, GuildDailyQuestTemplate, GuildDailyQuestContribution, Castle, CastleSiege, GuildBankItem, GuildBankLog,
 )
-
+from .services import get_guild, generate_daily_quests_for_guild, claim_daily_quest_reward
 from .serializers import (
     GuildSerializer, GuildMemberSerializer, GuildApplicationSerializer,
-    GuildLogSerializer, GuildChatMessageSerializer, GuildBankItemSerializer, GuildBankLogSerializer,
+    GuildLogSerializer, GuildChatMessageSerializer, GuildBankItemSerializer, GuildBankLogSerializer, 
 )
 
 
@@ -253,3 +257,211 @@ def upgrade_building(request):
     except (ValueError, TypeError) as e:
         return _err(str(e))
     return Response({'ok': True})
+
+@api_view(['POST'])
+def siege_action_view(request):
+    siege_id = request.data.get('siege_id')
+    action = request.data.get('action')  # 'attack', 'defend', 'flee'
+    try:
+        result = services.siege_action(request.user.player, int(siege_id), action)
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response(result)
+
+@api_view(['GET'])
+def castle_list(request):
+    """Список всех замков (для карты)."""
+    castles = Castle.objects.all().select_related('owner')
+    result = []
+    for c in castles:
+        result.append({
+            'id': c.id,
+            'name': c.name,
+            'slug': c.slug,
+            'image_path': c.image_path,
+            'map_x': c.map_x,
+            'map_y': c.map_y,
+            'owner': c.owner.tag if c.owner else None,
+            'owner_id': c.owner.id if c.owner else None,
+            'defense_level': c.defense_level,
+            'buff_xp_percent': c.buff_xp_percent,
+            'buff_gold_percent': c.buff_gold_percent,
+            'siege_cooldown_until': c.siege_cooldown_until.isoformat() if c.siege_cooldown_until else None,
+        })
+    return Response(result)
+
+@api_view(['GET'])
+def castle_detail(request, castle_id):
+    castle = Castle.objects.filter(id=castle_id).first()
+    if not castle:
+        return _err('Замок не найден.', 404)
+    
+    return Response({
+        'id': castle.id,
+        'name': castle.name,
+        'slug': castle.slug,
+        'description': castle.description,
+        'image_path': castle.image_path,
+        'map_x': castle.map_x,
+        'map_y': castle.map_y,
+        'owner': castle.owner.tag if castle.owner else None,
+        'owner_id': castle.owner.id if castle.owner else None,
+        'daily_tax': castle.daily_tax,
+        'passive_income': castle.passive_income,
+        'defense_level': castle.defense_level,
+        'buff_xp_percent': castle.buff_xp_percent,
+        'buff_gold_percent': castle.buff_gold_percent,
+        'is_under_siege': CastleSiege.objects.filter(castle=castle, status='active').exists(),
+        'siege_cooldown_until': castle.siege_cooldown_until.isoformat() if castle.siege_cooldown_until else None,
+    })
+
+@api_view(['POST'])
+def siege_start(request):
+    castle_id = request.data.get('castle_id')
+    try:
+        siege = services.start_castle_siege(request.user.player, int(castle_id))
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response({'ok': True, 'siege_id': siege.id})
+
+@api_view(['POST'])
+def siege_action_view(request):
+    siege_id = request.data.get('siege_id')
+    action = request.data.get('action')
+    try:
+        result = services.siege_action(request.user.player, int(siege_id), action)
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response(result)
+
+@api_view(['POST'])
+def collect_taxes(request):
+    try:
+        result = services.collect_castle_taxes(request.user.player)
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response(result)
+
+@api_view(['GET'])
+def get_ui_settings(request):
+    settings = GuildUISettings.objects.first()
+    if not settings:
+        # Если настроек нет — создаем дефолтные
+        settings = GuildUISettings.objects.create()
+    return Response({
+        'icon_taxes': settings.icon_taxes,
+        'icon_bank': settings.icon_bank,
+        'icon_war': settings.icon_war,
+        'icon_members': settings.icon_members,
+        'icon_chat': settings.icon_chat,
+        'icon_castle': settings.icon_castle,
+        'icon_applications': settings.icon_applications,
+    })
+
+
+@api_view(['POST'])
+def challenge_duel_view(request):
+    username = request.data.get('username')
+    try:
+        duel = services.challenge_duel(request.user.player, username)
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response({'ok': True, 'duel_id': duel.id})
+
+@api_view(['POST'])
+def accept_duel_view(request):
+    duel_id = request.data.get('duel_id')
+    try:
+        services.accept_duel(request.user.player, int(duel_id))
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response({'ok': True})
+
+@api_view(['POST'])
+def decline_duel_view(request):
+    duel_id = request.data.get('duel_id')
+    try:
+        services.decline_duel(request.user.player, int(duel_id))
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response({'ok': True})
+
+@api_view(['POST'])
+def duel_action_view(request):
+    duel_id = request.data.get('duel_id')
+    action = request.data.get('action')
+    try:
+        result = services.duel_action(request.user.player, int(duel_id), action)
+    except (ValueError, TypeError) as e:
+        return _err(str(e))
+    return Response(result)
+
+@api_view(['GET'])
+def active_duels_view(request):
+    return Response(services.get_active_duels(request.user.player))
+
+
+@api_view(['GET'])
+def duel_status(request, duel_id):
+    duel = Duel.objects.select_related('challenger__user', 'opponent__user', 'winner__user').filter(id=duel_id).first()
+    if not duel:
+        return _err('Дуэль не найдена.', 404)
+    
+    return Response({
+        'id': duel.id,
+        'status': duel.status,
+        'challenger_hp': duel.challenger_hp,
+        'opponent_hp': duel.opponent_hp,
+        'current_turn': duel.current_turn,
+        'winner': duel.winner.user.username if duel.winner else None,
+        'log': duel.log[-5:],
+    })
+
+@api_view(['GET'])
+def get_daily_quests(request):
+    player = request.user.player
+    guild = get_guild(player)
+    if not guild:
+        return Response({'error': 'Ты не в гильдии'}, status=400)
+
+    today = timezone.now().date()
+    # На всякий случай генерируем, если вдруг крон не сработал
+    from .services import generate_daily_quests_for_guild
+    generate_daily_quests_for_guild(guild, today)
+
+    quests = GuildDailyQuest.objects.filter(guild=guild, date=today).select_related('template')
+    
+    data = []
+    for q in quests:
+        contrib = GuildDailyQuestContribution.objects.filter(daily_quest=q, player=player).first()
+        data.append({
+            'id': q.id,
+            'title': q.template.title,
+            'description': q.template.description,
+            'image_path': q.template.image_path,
+            'required_count': q.template.required_count,
+            'progress': q.progress,
+            'is_completed': q.is_completed,
+            'my_kills': contrib.kills if contrib else 0,
+            'is_claimed': contrib.is_claimed if contrib else False,
+            'reward_gold': q.template.reward_gold_player,
+            'reward_exp': q.template.reward_exp,
+        })
+
+    return Response({
+        'streak': guild.daily_streak,
+        'quests': data
+    })
+
+@api_view(['POST'])
+def claim_daily_quest(request, quest_id):
+    try:
+        from .services import claim_daily_quest_reward
+        tmpl = claim_daily_quest_reward(request.user.player, quest_id)
+        return Response({
+            'message': f'Награда за "{tmpl.title}" получена!',
+            'gold': tmpl.reward_gold_player,
+            'exp': tmpl.reward_exp
+        })
+    except ValueError as e:
+        return Response({'error': str(e)}, status=400)
