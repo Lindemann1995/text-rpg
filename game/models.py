@@ -66,6 +66,12 @@ class Player(models.Model):
     intelligence = models.IntegerField(default=10, verbose_name='Интеллект')
     endurance = models.IntegerField(default=10, verbose_name='Выносливость')
     sanity = models.IntegerField(default=10, verbose_name='Рассудок')
+    
+    stat_points = models.IntegerField(
+        default=0, 
+        verbose_name="Очки характеристик",
+        help_text="Свободные очки, которые игрок может распределить"
+    )
 
     # Ресурсы
     health = models.IntegerField(default=100, verbose_name='Здоровье')
@@ -136,6 +142,27 @@ class Player(models.Model):
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Обновлён')
     enemies_killed = models.IntegerField(default=0, verbose_name='Убито врагов')
     last_seen = models.DateTimeField(auto_now=True, verbose_name='Последняя активность')
+
+        # Внутри класса Player
+    @property
+    def effective_max_health(self):
+        """Возвращает максимальное HP с учетом баффов гильдии."""
+        try:
+            from guilds.services import get_guild_bonuses
+            bonuses = get_guild_bonuses(self)
+            return int(self.max_health * bonuses['hp_multiplier'])
+        except Exception:
+            return self.max_health
+
+    @property
+    def effective_max_mana(self):
+        """Возвращает максимальное MP с учетом баффов гильдии."""
+        try:
+            from guilds.services import get_guild_bonuses
+            bonuses = get_guild_bonuses(self)
+            return int(self.max_mana * bonuses['mp_multiplier'])
+        except Exception:
+            return self.max_mana
     
     class Meta:
         verbose_name = 'Игрок'
@@ -518,6 +545,11 @@ class Enemy(models.Model):
         choices=ENEMY_TYPES,
         default='normal',
         verbose_name='Тип'
+    )
+    scale = models.FloatField(
+        default=1.0, 
+        verbose_name="Масштаб",
+        help_text="1.0 = стандартный размер. 1.5 = больше на 50%. 0.5 = меньше на 50%."
     )
     
     location = models.ForeignKey(

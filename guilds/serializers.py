@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import (Guild, GuildMember, GuildApplication, GuildLog, GuildChatMessage, GuildBankItem, GuildBankLog,
+from .models import (Guild, GuildMember, GuildApplication, GuildLog, GuildChatMessage, GuildBankItem, GuildBankLog, Castle, 
 )
 
 
@@ -81,3 +81,18 @@ class GuildBankLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = GuildBankLog
         fields = ['id', 'player_name', 'item_name', 'quantity', 'action', 'created_at']
+
+
+class CastleSerializer(serializers.ModelSerializer):
+    owner_tag = serializers.CharField(source='owner.tag', read_only=True)
+    owner_name = serializers.CharField(source='owner.name', read_only=True)
+
+    class Meta:
+        model = Castle
+        fields = [
+            'id', 'name', 'slug', 'description', 'image_path', 
+            'map_x', 'map_y', 'owner_tag', 'owner_name', 
+            'daily_tax', 'passive_income', 'defense_level',
+            'buff_xp_percent', 'buff_gold_percent',
+            'last_tax_collected', 'debt_deadline', 'siege_cooldown_until'
+        ]

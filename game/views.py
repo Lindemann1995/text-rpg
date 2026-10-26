@@ -25,10 +25,13 @@ from .serializers import (
 from django.utils import timezone
 import datetime
 from django.db.models import Q
+from guilds.services import get_guild_bonuses
+
 
 def apply_regen(player):
     """Ленивая регенерация HP. Восстанавливает 5% HP каждые 3 минуты."""
-    if player.health >= player.max_health:
+    max_hp = player.effective_max_health # <--- Берем с баффом
+    if player.health >= max_hp:
         return
 
     now = timezone.now()
@@ -36,15 +39,14 @@ def apply_regen(player):
 
     if time_passed >= 180:
         ticks = int(time_passed // 180)
-        regen_amount = int(player.max_health * 0.05) * ticks
+        regen_amount = int(max_hp * 0.05) * ticks # <--- Считаем от баффнутого
         player.health += regen_amount
         
-        if player.health > player.max_health:
-            player.health = player.max_health
+        if player.health > max_hp:
+            player.health = max_hp
             
         player.save()
-        print(f"=== РЕГЕНЕРАЦИЯ: {player.user.username} восстановил {regen_amount} HP. Теперь {player.health}/{player.max_health} ===")
-
+        print(f"=== РЕГЕНЕРАЦИЯ: {player.user.username} восстановил {regen_amount} HP. Теперь {player.health}/{max_hp} ===")
 
 def scene_to_dict(scene):
     """Превращает сцену в словарь для JSON"""
@@ -343,8 +345,12 @@ def combat_start(request):
         'enemy_image': enemy.image_path,
         'enemy_bg': enemy.bg_image_path,
         'enemy_flip': enemy.flip_image,
+        'enemy_scale': enemy.scale,
+        
+        # 🆕 ИСПОЛЬЗУЕМ ЭФФЕКТИВНОЕ ХП
         'player_hp': player.health,
-        'player_max_hp': player.max_health,
+        'player_max_hp': player.effective_max_health, 
+        
         'log': combat.log,
     })
 
@@ -390,8 +396,9 @@ def get_locations(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    from guilds.services import get_guild
+    from guilds.services import get_guild, get_guild_bonuses
     player_guild = get_guild(player)
+    bonuses = get_guild_bonuses(player) # 🆕 Получаем баффы игрока
 
     # Показываем обычные локации + гильдейские, если игрок в этой гильдии
     locations = Location.objects.filter(is_available=True).filter(
@@ -404,9 +411,9 @@ def get_locations(request):
         enemies = loc.enemies.filter(enemy_type='normal')
         
         # 2. Если своих нет — берем глобальных (у которых location=None)
-     # 🆕 Берем глобальных мобов ТОЛЬКО если это гильдейская локация
         if not enemies.exists() and loc.is_guild_only:
             enemies = Enemy.objects.filter(location__isnull=True, enemy_type='normal')
+            
         enemies_data = []
         for e in enemies:
             loot_list = []
@@ -419,6 +426,23 @@ def get_locations(request):
                         'rarity': loot.item.rarity,
                     })
 
+            # 🆕 РАСЧЕТ РЕАЛЬНЫХ НАГРАД
+            level_diff = player.level - e.level
+            xp_reward = e.xp_reward
+            gold_reward = e.gold_reward
+            
+            # Учитываем штраф/бонус за уровень
+            if level_diff >= 10:
+                xp_reward = max(1, xp_reward // 10)
+                gold_reward = max(0, gold_reward // 10)
+            elif level_diff <= -5:
+                xp_reward = int(xp_reward * 1.5)
+                gold_reward = int(gold_reward * 1.5)
+
+            # Применяем баффы гильдии
+            xp_reward = int(xp_reward * bonuses['xp_multiplier'])
+            gold_reward = int(gold_reward * bonuses['gold_multiplier'])
+
             enemies_data.append({
                 'slug': e.slug,
                 'name': e.name,
@@ -428,8 +452,8 @@ def get_locations(request):
                 'defense': e.defense,
                 'description': e.description,
                 'image_path': e.image_path,
-                'xp_reward': e.xp_reward,
-                'gold_reward': e.gold_reward,
+                'xp_reward': xp_reward,       # <--- Отдаем реальный опыт
+                'gold_reward': gold_reward,   # <--- Отдаем реальное золото
                 'loot': loot_list,
             })
 
@@ -534,7 +558,7 @@ def player_rest(request):
         }, status=400)
     
     player.gold -= cost
-    player.health = player.max_health
+    player.health = player.effective_max_health
     player.save()
     
     return Response({
@@ -1443,3 +1467,33 @@ def get_player_scrolls(request):
         })
 
     return Response({'scrolls': result})
+
+
+@api_view(['POST'])
+def upgrade_stat(request):
+    """Прокачка характеристики за очко"""
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    stat_name = request.data.get('stat') # 'strength', 'agility', 'intelligence', 'endurance', 'sanity'
+    
+    if player.stat_points <= 0:
+        return Response({'error': 'У вас нет свободных очков'}, status=400)
+
+    if stat_name not in ['strength', 'agility', 'intelligence', 'endurance', 'sanity']:
+        return Response({'error': 'Неверная характеристика'}, status=400)
+
+    # Прибавляем стат
+    current_val = getattr(player, stat_name)
+    setattr(player, stat_name, current_val + 1)
+    player.stat_points -= 1
+    player.save()
+
+    return Response({
+        'success': True,
+        'message': f'Характеристика {stat_name} увеличена!',
+        'stat_points': player.stat_points,
+        'new_value': getattr(player, stat_name),
+    })

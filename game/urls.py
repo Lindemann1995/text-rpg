@@ -74,4 +74,5 @@ urlpatterns = [
     path('craft/learn/', views.learn_recipe, name='learn_recipe'),
     path('craft/create/', views.craft_item, name='craft_item'),
     path('craft/scrolls/', views.get_player_scrolls, name='player_scrolls'),
+    path('player/upgrade-stat/', views.upgrade_stat, name='upgrade_stat'),
 ]

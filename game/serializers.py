@@ -85,6 +85,7 @@ class PlayerSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'character_class',
             'level', 'experience', 'experience_to_next',
             'strength', 'agility', 'intelligence', 'endurance', 'sanity',
+            'stat_points',
             'health', 'max_health', 'mana', 'max_mana', 'gold',
             'faction', 'is_in_tutorial', 'email_verified',
             'created_at',

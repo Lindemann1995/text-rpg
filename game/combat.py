@@ -8,15 +8,8 @@ from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot, Pla
 
 def start_combat(player: Player, enemy: Enemy) -> Combat:
     """Начинает новый бой"""
-    # Применяем баффы HP/MP от гильдии (для теста временно меняем макс. значения)
-    from guilds.services import get_guild_bonuses
-    bonuses = get_guild_bonuses(player)
+    # Баффы гильдии больше не умножают базовые статы в БД, мы считаем их на лету
     
-    if bonuses['hp_multiplier'] > 1.0 or bonuses['mp_multiplier'] > 1.0:
-        player.max_health = int(player.max_health * bonuses['hp_multiplier'])
-        player.max_mana = int(player.max_mana * bonuses['mp_multiplier'])
-        player.save()
-
     combat = Combat.objects.create(
         player=player,
         enemy=enemy,
@@ -42,9 +35,19 @@ def player_attack(combat: Combat) -> dict:
     # Применяем бафф Алтаря силы
     from guilds.services import get_guild_bonuses
     bonuses = get_guild_bonuses(player)
-    effective_strength = int(player.strength * bonuses['strength_multiplier'])
     
-    base_damage = max(1, effective_strength - enemy.defense)
+    # 🆕 СЧИТАЕМ БАЗОВЫЙ УРОН В ЗАВИСИМОСТИ ОТ КЛАССА
+    cls = player.character_class.name.lower() if player.character_class else 'воин'
+    primary_stat = player.strength
+    
+    if 'лучник' in cls:
+        primary_stat = player.agility
+    elif 'жнец' in cls:
+        primary_stat = player.intelligence # или player.sanity
+
+    effective_stat = int(primary_stat * bonuses['strength_multiplier'])
+    base_damage = max(1, effective_stat - enemy.defense)
+    
     is_crit = random.random() < 0.15
     damage = int(base_damage * 1.5) if is_crit else base_damage
     
@@ -61,21 +64,25 @@ def player_attack(combat: Combat) -> dict:
         combat.enemy_hp = 0
         combat.status = 'won'
         combat.finished_at = timezone.now()
-        _add_log(combat, 'system', f'🏆 Победа! +{enemy.xp_reward} XP, +{enemy.gold_reward} золота')
         
-        print(f"=== ЛОГ: ВРАГ {enemy.name} ПОБЕЖДЕН. ВЫЗОВ _apply_rewards ===")
+        # ВЫДАЕМ НАГРАДЫ И ПОЛУЧАЕМ СПИСОК (а также реальные цифры)
+        dropped_items, real_xp, real_gold = _apply_rewards(player, enemy)
         
-        # ВЫДАЕМ НАГРАДЫ И ПОЛУЧАЕМ СПИСОК
-        dropped_items = _apply_rewards(player, enemy)
+        # 🆕 ТЕПЕРЬ ЗАПИСЫВАЕМ В ЛОГ РЕАЛЬНЫЕ ЦИФРЫ
+        _add_log(combat, 'system', f'🏆 Победа! +{real_xp} XP, +{real_gold} золота')
+        
+        print(f"=== ЛОГ: ВРАГ {enemy.name} ПОБЕЖДЕН. ВЫДАНО {real_xp} XP, {real_gold} золота ===")
         
         # 🆕 ОБНОВЛЯЕМ ПРОГРЕСС КВЕСТОВ
         _update_kill_quests(player, enemy)
+        
         # 🆕 ОБНОВЛЯЕМ ПРОГРЕСС ЕЖЕДНЕВОК ГИЛЬДИИ
         try:
             from guilds.services import check_daily_quest_progress
             check_daily_quest_progress(player, enemy)
         except Exception as e:
             print(f"Ошибка при обновлении ежедневок: {e}")
+            
         # Сохраняем лут в бой (чтобы Flutter мог его прочитать)
         combat.boss_state = {'dropped_items': dropped_items}
         combat.save()
@@ -156,8 +163,12 @@ def player_flee(combat: Combat) -> dict:
     return _combat_to_dict(combat)
 
 
-def _apply_rewards(player: Player, enemy: Enemy) -> list:
+def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
+    """Выдает награды и возвращает (список_лута, реальный_опыт, реальное_золото)"""
     dropped_items = []
+    real_xp = 0
+    real_gold = 0
+    
     try:
         # Применяем баффы гильдии (опыт и золото)
         from guilds.services import get_guild_bonuses
@@ -178,6 +189,10 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
         # ПРИМЕНЯЕМ БАФФЫ
         xp_reward = int(xp_reward * bonuses['xp_multiplier'])
         gold_reward = int(gold_reward * bonuses['gold_multiplier'])
+
+        # Сохраняем для возврата
+        real_xp = xp_reward
+        real_gold = gold_reward
 
         player.experience += xp_reward
         player.gold += gold_reward
@@ -236,21 +251,19 @@ def _apply_rewards(player: Player, enemy: Enemy) -> list:
             player.level += 1
             player.experience_to_next = int(100 * (player.level ** 1.8))
             player.max_health += 10
-            player.health = player.max_health
-            player.strength += 2
-            player.agility += 2
-            player.intelligence += 2
-            player.endurance += 2
-            player.sanity += 1
-            print(f"=== УРОВЕНЬ ПОВЫШЕН: {player.user.username} теперь {player.level} уровня ===")
             
+            # 🆕 ВМЕСТО АВТОМАТИЧЕСКОЙ ПРИБАВКИ ДАЕМ ОЧКИ
+            player.stat_points += 3 
+            print(f"=== УРОВЕНЬ ПОВЫШЕН: {player.user.username} теперь {player.level} уровня. Получено 3 очка характеристик ===")
+            
+        # ВАЖНО: Сохраняем игрока в конце
         player.save()
         
     except Exception as e:
         print(f"!!! ОШИБКА ПРИ ВЫДАЧЕ НАГРАДЫ: {e}")
         player.save()
         
-    return dropped_items
+    return dropped_items, real_xp, real_gold
 
 
 def _update_kill_quests(player: Player, enemy: Enemy):
@@ -295,7 +308,8 @@ def _update_kill_quests(player: Player, enemy: Enemy):
 
 def _sync_player_hp(player: Player, new_hp: int):
     """Синхронизирует HP игрока после боя"""
-    player.health = max(1, new_hp) if new_hp > 0 else player.max_health // 2
+    max_hp = player.effective_max_health
+    player.health = max(1, new_hp) if new_hp > 0 else max_hp // 2
     player.save()
 
 
@@ -316,7 +330,7 @@ def _combat_to_dict(combat: Combat) -> dict:
         'turn': combat.turn,
         'player': {
             'hp': combat.player_hp,
-            'max_hp': combat.player.max_health,
+            'max_hp': combat.player.effective_max_health,
             'username': combat.player.user.username,
         },
         'enemy': {
