@@ -1023,3 +1023,45 @@ class PlayerRecipe(models.Model):
 
     def __str__(self):
         return f'{self.player.user.username} изучил {self.recipe.name}'
+
+# game/models.py
+
+class CombatSettings(models.Model):
+    """Настройки боевой системы (для гибкого баланса из админки)"""
+    crit_chance = models.FloatField(
+        default=0.15, 
+        verbose_name="Шанс крита (0.0 - 1.0)",
+        help_text="0.15 = 15%"
+    )
+    crit_multiplier = models.FloatField(
+        default=1.5, 
+        verbose_name="Множитель крита",
+        help_text="Во сколько раз увеличивается урон при крите"
+    )
+    level_diff_penalty_threshold = models.IntegerField(
+        default=10,
+        verbose_name="Порог разницы уровней (штраф)",
+        help_text="Если игрок выше моба на столько уровней, награда режется"
+    )
+    level_diff_penalty_divider = models.IntegerField(
+        default=10,
+        verbose_name="Делитель штрафа",
+        help_text="Во сколько раз режется награда при большом разрыве"
+    )
+    level_diff_bonus_threshold = models.IntegerField(
+        default=-5,
+        verbose_name="Порог разницы уровней (бонус)",
+        help_text="Если игрок ниже моба на столько уровней, награда растет"
+    )
+    level_diff_bonus_multiplier = models.FloatField(
+        default=1.5,
+        verbose_name="Множитель бонуса",
+        help_text="Во сколько раз растет награда при низком уровне"
+    )
+
+    class Meta:
+        verbose_name = "Настройки боя"
+        verbose_name_plural = "Настройки боя"
+
+    def __str__(self):
+        return "Настройки боевой системы"

@@ -3,7 +3,8 @@
 """
 import random
 from django.utils import timezone
-from .models import Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot, PlayerQuest
+from .models import (Combat, Enemy, Player, Flag, Item, Inventory, EnemyLoot, PlayerQuest, CombatSettings
+)
 
 
 def start_combat(player: Player, enemy: Enemy) -> Combat:
@@ -48,8 +49,9 @@ def player_attack(combat: Combat) -> dict:
     effective_stat = int(primary_stat * bonuses['strength_multiplier'])
     base_damage = max(1, effective_stat - enemy.defense)
     
-    is_crit = random.random() < 0.15
-    damage = int(base_damage * 1.5) if is_crit else base_damage
+    settings = get_combat_settings()
+    is_crit = random.random() < settings.crit_chance
+    damage = int(base_damage * settings.crit_multiplier) if is_crit else base_damage
     
     combat.enemy_hp -= damage
     combat.turn += 1
@@ -179,12 +181,13 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
         xp_reward = enemy.xp_reward
         gold_reward = enemy.gold_reward
         
-        if level_diff >= 10:
-            xp_reward = max(1, xp_reward // 10)
-            gold_reward = max(0, gold_reward // 10)
-        elif level_diff <= -5:
-            xp_reward = int(xp_reward * 1.5)
-            gold_reward = int(gold_reward * 1.5)
+        settings = get_combat_settings()
+        if level_diff >= settings.level_diff_penalty_threshold:
+            xp_reward = max(1, xp_reward // settings.level_diff_penalty_divider)
+            gold_reward = max(0, gold_reward // settings.level_diff_penalty_divider)
+        elif level_diff <= settings.level_diff_bonus_threshold:
+            xp_reward = int(xp_reward * settings.level_diff_bonus_multiplier)
+            gold_reward = int(gold_reward * settings.level_diff_bonus_multiplier)
 
         # ПРИМЕНЯЕМ БАФФЫ
         xp_reward = int(xp_reward * bonuses['xp_multiplier'])
@@ -342,3 +345,11 @@ def _combat_to_dict(combat: Combat) -> dict:
         },
         'log': combat.log[-10:],
     }
+
+def get_combat_settings():
+    """Возвращает настройки боя или дефолтные, если их нет в БД"""
+    settings = CombatSettings.objects.first()
+    if not settings:
+        # Если настроек нет (например, в тестах), создаем временные
+        return CombatSettings()
+    return settings

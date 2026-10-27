@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     CharacterClass, Player, Scene, Choice, Flag, Item, Inventory,
     Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot, 
-    NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest, Recipe, RecipeIngredient, PlayerRecipe
+    NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest, Recipe, RecipeIngredient, PlayerRecipe, CombatSettings, 
 )
 
 
@@ -253,3 +253,16 @@ class PlayerRecipeAdmin(admin.ModelAdmin):
     list_display = ['player', 'recipe', 'learned_at']
     list_filter = ['recipe']
     search_fields = ['player__user__username', 'recipe__name']
+
+from django.contrib import admin
+from .models import CombatSettings
+
+@admin.register(CombatSettings)
+class CombatSettingsAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        # Запрещаем создавать больше одной записи настроек
+        return not CombatSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        # Запрещаем удалять настройки
+        return False

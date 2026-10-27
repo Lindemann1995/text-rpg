@@ -14,13 +14,13 @@ from guilds.middleware import JWTAuthMiddleware
 from social.consumers import PrivateChatConsumer
 
 application = ProtocolTypeRouter({
-    "http": django_asgi_app,
+    # 🆕 ТОЛЬКО ОДИН раз, и БЕЗ URLRouter!
+    "http": django_asgi_app, 
+    
     "websocket": AuthMiddlewareStack(
         URLRouter([
             path("ws/chat/", ChatConsumer.as_asgi()),
             path('ws/chat/private/', PrivateChatConsumer.as_asgi()),
-            
-            # Исправленная строка для гильдейского чата:
             re_path(r"^ws/guild/", JWTAuthMiddleware(URLRouter(guild_ws))),
         ])
     ),

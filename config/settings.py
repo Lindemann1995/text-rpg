@@ -131,3 +131,46 @@ DEFAULT_FROM_EMAIL = 'noreply@code-nest.ru'
 # ⬇️ ДОБАВЛЕНО ДЛЯ ПРОВЕРКИ АССЕТОВ ⬇️
 # Путь к папке assets/images (судя по скриншоту, она лежит прямо в корне проекта C:\ten_drevnih\assets\images)
 ASSETS_DIR = BASE_DIR / 'assets' / 'images'
+
+
+# ===== НАСТРОЙКИ ПОЧТЫ ДЛЯ ОТПРАВКИ ОШИБОК =====
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.yandex.ru'
+EMAIL_PORT = 465
+EMAIL_USE_SSL = True
+EMAIL_HOST_USER = 'artemkalugin1995@yandex.ru'      # <--- Твой адрес
+EMAIL_HOST_PASSWORD = 'vrpigpsgwvrlmjhl'      # <--- Сюда вставь 16-значный пароль из Шага 1
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+SERVER_EMAIL = EMAIL_HOST_USER
+ADMINS = [('Linde', 'artemkalugin1995@yandex.ru')] # <--- Куда слать ошибки
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        # 🆕 ПИШЕМ ВСЁ В ФАЙЛ
+        'file': {
+            'level': 'ERROR', # Пишем только ошибки и выше
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'django_errors.log', # Файл будет в корне проекта
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'ERROR',
+            'propagate': True,
+        },
+    },
+}
