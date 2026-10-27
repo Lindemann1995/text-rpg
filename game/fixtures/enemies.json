@@ -1,0 +1,48 @@
+[
+{
+  "model": "game.enemy",
+  "pk": 1,
+  "fields": {
+    "name": "Кровавый лучник",
+    "slug": "blood_archer",
+    "description": "",
+    "icon": "",
+    "enemy_type": "normal",
+    "scale": 1.0,
+    "location": null,
+    "flip_image": false,
+    "level": 1,
+    "health": 50,
+    "attack": 5,
+    "defense": 0,
+    "xp_reward": 10,
+    "gold_reward": 5,
+    "abilities": {},
+    "image_path": "characters/enemies/blood_archer.png",
+    "bg_image_path": "ui/battle_bg.png"
+  }
+},
+{
+  "model": "game.enemy",
+  "pk": 2,
+  "fields": {
+    "name": "Тестовый дракон",
+    "slug": "testovyj-drakon",
+    "description": "писюн",
+    "icon": "",
+    "enemy_type": "normal",
+    "scale": 1.0,
+    "location": 6,
+    "flip_image": true,
+    "level": 1,
+    "health": 50,
+    "attack": 5,
+    "defense": 0,
+    "xp_reward": 10,
+    "gold_reward": 5,
+    "abilities": {},
+    "image_path": "characters/enemies/forest_wolf.png",
+    "bg_image_path": "ui/battle_forest.png"
+  }
+}
+]
