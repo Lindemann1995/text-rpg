@@ -1497,3 +1497,5 @@ def upgrade_stat(request):
         'stat_points': player.stat_points,
         'new_value': getattr(player, stat_name),
     })
+
+# Тест автодеплоя: 27 октября 2026

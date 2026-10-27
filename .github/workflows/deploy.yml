@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - dev
 
 jobs:
   deploy:
@@ -20,12 +19,6 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-              echo "🚀 Деплой на PROD (text-rpg)"
-              cd /home/dev/text-rpg/
-              ./deploy_game.sh
-            else
-              echo "🧪 Деплой на DEV (dev-text-rpg)"
-              cd /home/dev/text-rpg-dev/
-              ./deploy_game.sh
-            fi
+            echo "🚀 Деплой на PROD (text-rpg)"
+            cd /home/dev/text-rpg/
+            ./deploy_game.sh
