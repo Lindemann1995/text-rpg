@@ -1,0 +1,19 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border-l-4 border-blue-500">
+        <p class="text-sm text-gray-500">Всего игроков</p>
+        <p class="text-3xl font-bold">{{ total_players }}</p>
+    </div>
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border-l-4 border-yellow-500">
+        <p class="text-sm text-gray-500">Золото в мире</p>
+        <p class="text-3xl font-bold">{{ total_gold }}</p>
+    </div>
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border-l-4 border-red-500">
+        <p class="text-sm text-gray-500">Гильдии</p>
+        <p class="text-3xl font-bold">{{ total_guilds }}</p>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,119 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div class="px-4 py-6">
+    <h1 class="text-2xl font-bold text-font-important-light dark:text-font-important-dark mb-6">
+        Модерация чата
+    </h1>
+
+    {% if messages %}
+    <div class="mb-4">
+        {% for message in messages %}
+        <div class="p-3 mb-2 rounded-lg {% if message.tags == 'success' %}bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200{% else %}bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200{% endif %}">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Жалобы -->
+    <div class="mb-8">
+        <h2 class="text-lg font-semibold mb-3 text-font-important-light dark:text-font-important-dark">
+            Жалобы ({{ reports|length }})
+        </h2>
+        {% if reports %}
+        <div class="border border-base-200 dark:border-base-800 rounded-lg overflow-hidden bg-white dark:bg-base-900">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-base-50 dark:bg-base-800 text-font-important-light dark:text-font-important-dark">
+                    <tr>
+                        <th class="p-3">Кто пожаловался</th>
+                        <th class="p-3">На кого</th>
+                        <th class="p-3">Причина</th>
+                        <th class="p-3">Действие</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-base-200 dark:divide-base-800">
+                    {% for report in reports %}
+                    <tr>
+                        <td class="p-3">{{ report.reporter.user.username }}</td>
+                        <td class="p-3 font-bold text-primary-600">{{ report.target.user.username }}</td>
+                        <td class="p-3">
+                            {{ report.get_reason_display }}<br>
+                            <small class="text-base-500">{{ report.comment }}</small>
+                        </td>
+                        <td class="p-3">
+                            <form method="post" class="flex items-center gap-2">
+                                {% csrf_token %}
+                                <input type="hidden" name="report_id" value="{{ report.id }}">
+                                <input type="hidden" name="player_id" value="{{ report.target.id }}">
+                                <select name="action" class="border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                    <option value="ban">Бан</option>
+                                    <option value="mute">Мут</option>
+                                </select>
+                                <input type="number" name="duration" value="24" class="w-16 border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                <input type="text" name="reason" placeholder="Причина" class="border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                <button type="submit" class="bg-primary-600 hover:bg-primary-700 text-white px-3 py-1 rounded">Применить</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-base-500">Нет активных жалоб.</p>
+        {% endif %}
+    </div>
+
+    <!-- Все игроки -->
+    <div>
+        <h2 class="text-lg font-semibold mb-3 text-font-important-light dark:text-font-important-dark">
+            Все игроки
+        </h2>
+        <div class="border border-base-200 dark:border-base-800 rounded-lg overflow-hidden bg-white dark:bg-base-900">
+            <table class="w-full text-left text-sm">
+                <thead class="bg-base-50 dark:bg-base-800 text-font-important-light dark:text-font-important-dark">
+                    <tr>
+                        <th class="p-3">Игрок</th>
+                        <th class="p-3">Уровень</th>
+                        <th class="p-3">Статус</th>
+                        <th class="p-3">Действие</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-base-200 dark:divide-base-800">
+                    {% for player in all_players %}
+                    <tr>
+                        <td class="p-3">{{ player.user.username }}</td>
+                        <td class="p-3">{{ player.level }}</td>
+                        <td class="p-3">
+                            {% if player.is_banned %}
+                                <span class="text-red-600 font-bold">Забанен</span>
+                            {% elif player.mute_until %}
+                                <span class="text-yellow-600 font-bold">Мут</span>
+                            {% else %}
+                                <span class="text-green-600 font-bold">Активен</span>
+                            {% endif %}
+                        </td>
+                        <td class="p-3">
+                            <form method="post" class="flex items-center gap-2">
+                                {% csrf_token %}
+                                <input type="hidden" name="player_id" value="{{ player.id }}">
+                                <select name="action" class="border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                    <option value="ban">Бан</option>
+                                    <option value="mute">Мут</option>
+                                    <option value="unban">Разбанить</option>
+                                </select>
+                                <input type="number" name="duration" value="24" class="w-16 border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                <input type="text" name="reason" placeholder="Причина" class="border rounded px-2 py-1 bg-white dark:bg-base-800 dark:border-base-700">
+                                <button type="submit" class="bg-primary-600 hover:bg-primary-700 text-white px-3 py-1 rounded">Применить</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

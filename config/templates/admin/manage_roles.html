@@ -1,0 +1,42 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>Управление ролями</h1>
+<table style="width: 100%; border-collapse: collapse;">
+    <thead>
+        <tr style="background: #1a0a0a; color: #d4af37;">
+            <th style="padding: 10px;">Игрок</th>
+            <th style="padding: 10px;">Уровень</th>
+            <th style="padding: 10px;">Текущая роль</th>
+            <th style="padding: 10px;">Действие</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for player in players %}
+        <tr style="border-bottom: 1px solid #3a1a1a;">
+            <td style="padding: 10px;">{{ player.user.username }}</td>
+            <td style="padding: 10px;">{{ player.level }}</td>
+            <td style="padding: 10px;">
+                <span style="color: {% if player.role == 'admin' %}#d4af37{% elif player.role == 'moderator' %}#6bbf6b{% else %}#888{% endif %};">
+                    {{ player.get_role_display }}
+                </span>
+            </td>
+            <td style="padding: 10px;">
+                <form method="post" style="display: inline;">
+                    {% csrf_token %}
+                    <input type="hidden" name="player_id" value="{{ player.id }}">
+                    <select name="role" style="background: #0a0a0a; color: white; border: 1px solid #3a1a1a; padding: 5px;">
+                        <option value="player" {% if player.role == 'player' %}selected{% endif %}>Игрок</option>
+                        <option value="vip" {% if player.role == 'vip' %}selected{% endif %}>VIP</option>
+                        <option value="moderator" {% if player.role == 'moderator' %}selected{% endif %}>Модератор</option>
+                        <option value="admin" {% if player.role == 'admin' %}selected{% endif %}>Администратор</option>
+                    </select>
+                    <button type="submit" style="background: #8b0000; color: white; border: none; padding: 5px 10px; cursor: pointer;">Изменить</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

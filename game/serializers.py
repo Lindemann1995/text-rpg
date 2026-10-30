@@ -30,10 +30,12 @@ class RegisterSerializer(serializers.ModelSerializer):
         label='Подтверждение пароля',
     )
     email = serializers.EmailField(required=True)
+    privacy_accepted = serializers.BooleanField(required=True)  # 🆕
     
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'password_confirm']
+        # Добавляем privacy_accepted сюда!
+        fields = ['username', 'email', 'password', 'password_confirm', 'privacy_accepted']
     
     def validate(self, attrs):
         """Проверка, что пароли совпадают"""
@@ -44,20 +46,25 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
     
     def validate_username(self, value):
-        """Проверка, что ник свободен"""
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError('Этот ник уже занят')
         return value
     
     def validate_email(self, value):
-        """Проверка, что email не занят"""
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('Этот email уже используется')
         return value
     
+    def validate_privacy_accepted(self, value):  # 🆕
+        if not value:
+            raise serializers.ValidationError(
+                'Необходимо согласие с политикой конфиденциальности'
+            )
+        return value
+    
     def create(self, validated_data):
-        """Создаём User + Player"""
         validated_data.pop('password_confirm')
+        validated_data.pop('privacy_accepted', None)
         password = validated_data.pop('password')
         
         user = User.objects.create_user(
@@ -66,9 +73,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             password=password,
         )
         
-        # Создаём Player, автоматически привязанный к User
         Player.objects.create(user=user)
-        
         return user
 
 

@@ -1,52 +1,63 @@
-from django.http import JsonResponse
-from django.contrib.auth.models import User
-from django.core.mail import send_mail
+import json
+import secrets
+from datetime import timedelta
+from django.contrib import messages
+import uuid
 from django.conf import settings
+from django.contrib.admin.views.decorators import staff_member_required
+from django.contrib.auth.models import User, Group
+from django.core.mail import send_mail
+from django.db.models import Q, Sum
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404, render, redirect
+from django.utils import timezone
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.shortcuts import get_object_or_404
-import secrets
+from social.models import GlobalChatMessage
+from guilds.models import Guild
+from guilds.services import get_guild_bonuses
+
 from .combat import start_combat, player_attack, player_defend, player_flee
 from .models import (
     Scene, Player, CharacterClass, Choice, Flag,
     Location, Enemy, Combat, Item, Inventory,
-    Trader, EquipmentSlot, 
-    NPC, Quest, PlayerQuest, QuestLine, Recipe, RecipeIngredient, PlayerRecipe
+    Trader, EquipmentSlot,
+    NPC, Quest, PlayerQuest, QuestLine, Recipe, RecipeIngredient, PlayerRecipe, OnlineHistory, PlayerReport, PlayerNotification,
 )
 from .serializers import (
     RegisterSerializer, PlayerSerializer, CharacterClassSerializer,
-    # 🆕 СЕРИАЛИЗАТОРЫ КВЕСТОВ
     NPCSerializer, QuestSerializer, PlayerQuestSerializer, AllQuestsSerializer
 )
-from django.utils import timezone
-import datetime
-from django.db.models import Q
-from guilds.services import get_guild_bonuses
 
 
 def apply_regen(player):
     """Ленивая регенерация HP. Восстанавливает 5% HP каждые 3 минуты."""
-    max_hp = player.effective_max_health # <--- Берем с баффом
+    max_hp = player.effective_max_health
     if player.health >= max_hp:
         return
 
     now = timezone.now()
-    time_passed = (now - player.updated_at).total_seconds()
+    # Считаем время от последней регенерации, а не от последнего сохранения
+    time_passed = (now - player.last_regen_at).total_seconds()
 
     if time_passed >= 180:
         ticks = int(time_passed // 180)
-        regen_amount = int(max_hp * 0.05) * ticks # <--- Считаем от баффнутого
+        regen_amount = int(max_hp * 0.05) * ticks
         player.health += regen_amount
-        
+
         if player.health > max_hp:
             player.health = max_hp
-            
-        player.save()
+
+        # Обновляем время последней регенерации и сохраняем ТОЛЬКО нужные поля
+        player.last_regen_at = now
+        player.save(update_fields=['health', 'last_regen_at'])
         print(f"=== РЕГЕНЕРАЦИЯ: {player.user.username} восстановил {regen_amount} HP. Теперь {player.health}/{max_hp} ===")
+
 
 def scene_to_dict(scene):
     """Превращает сцену в словарь для JSON"""
@@ -58,7 +69,7 @@ def scene_to_dict(scene):
             'next_scene_slug': choice.next_scene.slug if choice.next_scene else None,
             'set_flag': choice.set_flag,
         })
-    
+
     return {
         'id': scene.id,
         'slug': scene.slug,
@@ -75,7 +86,7 @@ def start_scene(request):
     scene = Scene.objects.filter(is_start=True).first()
     if not scene:
         return JsonResponse({'error': 'Стартовая сцена не найдена'}, status=404)
-    
+
     return JsonResponse(scene_to_dict(scene), json_dumps_params={'ensure_ascii': False})
 
 
@@ -85,8 +96,9 @@ def get_scene(request, slug):
         scene = Scene.objects.get(slug=slug)
     except Scene.DoesNotExist:
         return JsonResponse({'error': f'Сцена "{slug}" не найдена'}, status=404)
-    
+
     return JsonResponse(scene_to_dict(scene), json_dumps_params={'ensure_ascii': False})
+
 
 def get_tokens_for_user(user):
     """Генерирует JWT-токены для пользователя"""
@@ -102,12 +114,18 @@ def get_tokens_for_user(user):
 def register(request):
     """Регистрация нового игрока"""
     serializer = RegisterSerializer(data=request.data)
-    
+
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+
     user = serializer.save()
-    
+
+    # 🆕 Фиксируем согласие с политикой
+    player = user.player
+    player.privacy_accepted_at = timezone.now()
+    player.privacy_version = '1.0'
+    player.save(update_fields=['privacy_accepted_at', 'privacy_version'])
+
     token = secrets.token_urlsafe(32)
     player = user.player
     player.email_verification_token = token
@@ -121,7 +139,7 @@ def register(request):
         player.save()
     except Item.DoesNotExist:
         print("ОШИБКА: Стартовый меч не найден в базе!")
-    
+
     verification_url = f'https://dev.api.code-nest.ru/api/auth/verify-email/{token}/'
     send_mail(
         subject='Подтверждение email — Тень Древних',
@@ -130,9 +148,9 @@ def register(request):
         recipient_list=[user.email],
         fail_silently=False,
     )
-    
+
     tokens = get_tokens_for_user(user)
-    
+
     return Response({
         'message': 'Игрок создан. Проверь консоль сервера для подтверждения email.',
         'user': {
@@ -155,11 +173,11 @@ def verify_email(request, token):
         return Response({
             'error': 'Неверный или устаревший токен'
         }, status=status.HTTP_400_BAD_REQUEST)
-    
+
     player.email_verified = True
     player.email_verification_token = ''
     player.save()
-    
+
     return Response({
         'message': 'Email успешно подтверждён!',
         'username': player.user.username,
@@ -175,14 +193,23 @@ def me(request):
         return Response({
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
-    
-    # 🆕 Обновляем время последней активности (чтобы работал онлайн-статус)
-    player.save() 
-    
+
+    # Обновляем время последней активности (чтобы работал онлайн-статус)
+    player.save()
+
     apply_regen(player)
-    
+
+    # 🆕 Записываем онлайн раз в минуту
+    last_record = OnlineHistory.objects.order_by('-timestamp').first()
+    if not last_record or (timezone.now() - last_record.timestamp) > timedelta(minutes=1):
+        online_count = Player.objects.filter(
+            last_seen__gte=timezone.now() - timedelta(minutes=5)
+        ).count()
+        OnlineHistory.objects.create(online=online_count)
+
     serializer = PlayerSerializer(player)
     return Response(serializer.data)
+
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -197,26 +224,26 @@ def list_classes(request):
 def choose_class(request):
     """Выбор класса персонажа"""
     class_id = request.data.get('class_id')
-    
+
     if not class_id:
         return Response({
             'error': 'Не указан class_id'
         }, status=status.HTTP_400_BAD_REQUEST)
-    
+
     try:
         character_class = CharacterClass.objects.get(id=class_id)
     except CharacterClass.DoesNotExist:
         return Response({
             'error': 'Класс не найден'
         }, status=status.HTTP_404_NOT_FOUND)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({
             'error': 'Профиль игрока не найден'
         }, status=status.HTTP_404_NOT_FOUND)
-    
+
     player.character_class = character_class
     player.strength = character_class.base_strength
     player.agility = character_class.base_agility
@@ -224,7 +251,7 @@ def choose_class(request):
     player.endurance = character_class.base_endurance
     player.sanity = character_class.base_sanity
     player.save()
-    
+
     serializer = PlayerSerializer(player)
     return Response({
         'message': f'Класс "{character_class.name}" выбран!',
@@ -239,7 +266,7 @@ def current_scene(request):
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
-    
+
     apply_regen(player)
 
     if not player.current_scene:
@@ -248,9 +275,9 @@ def current_scene(request):
             return Response({'error': 'Стартовая сцена не найдена'}, status=404)
         player.current_scene = start
         player.save()
-    
+
     serializer_data = scene_to_dict(player.current_scene)
-    
+
     serializer_data['player'] = {
         'username': player.user.username,
         'level': player.level,
@@ -261,7 +288,7 @@ def current_scene(request):
         'max_mana': player.max_mana,
         'character_class': player.character_class.name if player.character_class else None,
     }
-    
+
     return Response(serializer_data)
 
 
@@ -269,34 +296,34 @@ def current_scene(request):
 def choose_in_scene(request):
     """Сделать выбор в текущей сцене"""
     choice_id = request.data.get('choice_id')
-    
+
     if not choice_id:
         return Response({'error': 'Не указан choice_id'}, status=400)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
-    
+
     if not player.current_scene:
         return Response({'error': 'Игрок не находится в сцене'}, status=400)
-    
+
     try:
         choice = Choice.objects.get(id=choice_id, scene=player.current_scene)
     except Choice.DoesNotExist:
         return Response({'error': 'Такого выбора нет в текущей сцене'}, status=404)
-    
+
     if choice.set_flag:
         Flag.objects.update_or_create(
             player=player,
             name=choice.set_flag,
             defaults={'value': '1'},
         )
-    
+
     if choice.next_scene:
         player.current_scene = choice.next_scene
         player.save()
-        
+
         return Response({
             'message': f'Выбор сделан: {choice.text}',
             'set_flag': choice.set_flag or None,
@@ -310,24 +337,25 @@ def choose_in_scene(request):
             'is_end': True,
         })
 
+
 @api_view(['POST'])
 def combat_start(request):
     """Начать бой с врагом (по enemy_slug)"""
     enemy_slug = request.data.get('enemy_slug')
-    
+
     if not enemy_slug:
         return Response({'error': 'Не указан enemy_slug'}, status=400)
-    
+
     try:
         enemy = Enemy.objects.get(slug=enemy_slug)
     except Enemy.DoesNotExist:
         return Response({'error': 'Враг не найден'}, status=404)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
-    
+
     apply_regen(player)
 
     active = Combat.objects.filter(player=player, status='active').first()
@@ -335,9 +363,9 @@ def combat_start(request):
         active.status = 'fled'
         active.finished_at = timezone.now()
         active.save()
-    
+
     combat = start_combat(player, enemy)
-    
+
     return Response({
         'combat_id': combat.id,
         'enemy_name': enemy.name,
@@ -346,11 +374,8 @@ def combat_start(request):
         'enemy_bg': enemy.bg_image_path,
         'enemy_flip': enemy.flip_image,
         'enemy_scale': enemy.scale,
-        
-        # 🆕 ИСПОЛЬЗУЕМ ЭФФЕКТИВНОЕ ХП
         'player_hp': player.health,
-        'player_max_hp': player.effective_max_health, 
-        
+        'player_max_hp': player.effective_max_health,
         'log': combat.log,
     })
 
@@ -359,22 +384,22 @@ def combat_start(request):
 def combat_action(request, combat_id):
     """Сделать ход в бою (attack / defend / flee)"""
     action = request.data.get('action')
-    
+
     if action not in ['attack', 'defend', 'flee']:
         return Response({'error': 'Неверное действие'}, status=400)
-    
+
     try:
         combat = Combat.objects.get(id=combat_id, player=request.user.player)
     except Combat.DoesNotExist:
         return Response({'error': 'Бой не найден'}, status=404)
-    
+
     if action == 'attack':
         result = player_attack(combat)
     elif action == 'defend':
         result = player_defend(combat)
     else:
         result = player_flee(combat)
-    
+
     return Response(result)
 
 
@@ -385,9 +410,10 @@ def combat_state(request, combat_id):
         combat = Combat.objects.get(id=combat_id, player=request.user.player)
     except Combat.DoesNotExist:
         return Response({'error': 'Бой не найден'}, status=404)
-    
+
     from .combat import _combat_to_dict
     return Response(_combat_to_dict(combat))
+
 
 @api_view(['GET'])
 def get_locations(request):
@@ -398,22 +424,19 @@ def get_locations(request):
 
     from guilds.services import get_guild, get_guild_bonuses
     player_guild = get_guild(player)
-    bonuses = get_guild_bonuses(player) # 🆕 Получаем баффы игрока
+    bonuses = get_guild_bonuses(player)
 
-    # Показываем обычные локации + гильдейские, если игрок в этой гильдии
     locations = Location.objects.filter(is_available=True).filter(
         Q(is_guild_only=False) | Q(is_guild_only=True, guild=player_guild)
     ).order_by('min_level')
-    
+
     result = []
     for loc in locations:
-        # 1. Берем мобов локации
         enemies = loc.enemies.filter(enemy_type='normal')
-        
-        # 2. Если своих нет — берем глобальных (у которых location=None)
+
         if not enemies.exists() and loc.is_guild_only:
             enemies = Enemy.objects.filter(location__isnull=True, enemy_type='normal')
-            
+
         enemies_data = []
         for e in enemies:
             loot_list = []
@@ -426,12 +449,10 @@ def get_locations(request):
                         'rarity': loot.item.rarity,
                     })
 
-            # 🆕 РАСЧЕТ РЕАЛЬНЫХ НАГРАД
             level_diff = player.level - e.level
             xp_reward = e.xp_reward
             gold_reward = e.gold_reward
-            
-            # Учитываем штраф/бонус за уровень
+
             if level_diff >= 10:
                 xp_reward = max(1, xp_reward // 10)
                 gold_reward = max(0, gold_reward // 10)
@@ -439,7 +460,6 @@ def get_locations(request):
                 xp_reward = int(xp_reward * 1.5)
                 gold_reward = int(gold_reward * 1.5)
 
-            # Применяем баффы гильдии
             xp_reward = int(xp_reward * bonuses['xp_multiplier'])
             gold_reward = int(gold_reward * bonuses['gold_multiplier'])
 
@@ -452,8 +472,8 @@ def get_locations(request):
                 'defense': e.defense,
                 'description': e.description,
                 'image_path': e.image_path,
-                'xp_reward': xp_reward,       # <--- Отдаем реальный опыт
-                'gold_reward': gold_reward,   # <--- Отдаем реальное золото
+                'xp_reward': xp_reward,
+                'gold_reward': gold_reward,
                 'loot': loot_list,
             })
 
@@ -466,8 +486,9 @@ def get_locations(request):
             'enemies': enemies_data,
             'location_type': loc.location_type,
         })
-    
+
     return Response(result)
+
 
 @api_view(['POST'])
 def location_hunt(request, slug):
@@ -476,18 +497,17 @@ def location_hunt(request, slug):
         location = Location.objects.get(slug=slug)
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
-    
+
     enemies = list(location.enemies.filter(enemy_type='normal'))
-    
-    # 🆕 Берем глобальных мобов ТОЛЬКО если это гильдейская локация
+
     if not enemies and location.is_guild_only:
         enemies = list(Enemy.objects.filter(location__isnull=True, enemy_type='normal'))
-    
+
     if not enemies:
         return Response({'error': 'В этой локации нет врагов'}, status=404)
-    
+
     enemy = random.choice(enemies)
-    
+
     return Response({
         'enemy_slug': enemy.slug,
         'enemy_name': enemy.name,
@@ -504,26 +524,26 @@ def location_boss(request, slug):
         location = Location.objects.get(slug=slug)
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
-    
+
     boss = location.enemies.filter(enemy_type='boss').first()
-    
+
     if not boss:
         return Response({'error': 'В этой локации нет босса'}, status=404)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
-    
+
     required_level = location.min_level + 5
-    
+
     if player.level < required_level:
         return Response({
             'error': f'Для боя с боссом нужен уровень {required_level}+',
             'player_level': player.level,
             'required_level': required_level,
         }, status=403)
-    
+
     return Response({
         'enemy_slug': boss.slug,
         'enemy_name': boss.name,
@@ -533,6 +553,7 @@ def location_boss(request, slug):
         'is_boss': True,
     })
 
+
 @api_view(['POST'])
 def player_rest(request):
     """Отдых — восстановление HP за золото"""
@@ -540,27 +561,27 @@ def player_rest(request):
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль игрока не найден'}, status=404)
-    
+
     if player.health >= player.max_health:
         return Response({
             'error': 'У тебя уже полное здоровье',
             'player_hp': player.health,
             'player_max_hp': player.max_health,
         }, status=400)
-    
+
     cost = 10 * player.level
-    
+
     if player.gold < cost:
         return Response({
             'error': f'Нужно {cost} золота (у тебя {player.gold})',
             'cost': cost,
             'player_gold': player.gold,
         }, status=400)
-    
+
     player.gold -= cost
     player.health = player.effective_max_health
     player.save()
-    
+
     return Response({
         'message': f'Ты отдохнул. Восстановлено {player.max_health} HP.',
         'cost': cost,
@@ -569,32 +590,33 @@ def player_rest(request):
         'player_gold': player.gold,
     })
 
+
 @api_view(['POST'])
 def use_potion(request):
     """Использовать зелье в бою или вне боя"""
     potion_slug = request.data.get('potion_slug')
-    
+
     if not potion_slug:
         return Response({'error': 'Не указан potion_slug'}, status=400)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     try:
         item = Item.objects.get(slug=potion_slug, item_type='potion')
     except Item.DoesNotExist:
         return Response({'error': 'Зелье не найдено'}, status=404)
-    
+
     try:
         inv = Inventory.objects.get(player=player, item=item)
     except Inventory.DoesNotExist:
         return Response({'error': 'У тебя нет этого зелья'}, status=400)
-    
+
     if inv.quantity <= 0:
         return Response({'error': 'Зелья закончились'}, status=400)
-    
+
     if item.effect_type == 'heal_hp':
         if player.health >= player.max_health:
             return Response({'error': 'У тебя полное HP'}, status=400)
@@ -611,15 +633,15 @@ def use_potion(request):
         message = f'Восстановлено {healed} MP'
     else:
         return Response({'error': 'Неизвестный эффект'}, status=400)
-    
+
     inv.quantity -= 1
     if inv.quantity <= 0:
         inv.delete()
     else:
         inv.save()
-    
+
     player.save()
-    
+
     return Response({
         'message': message,
         'player_hp': player.health,
@@ -637,12 +659,12 @@ def get_potions(request):
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     potions = Inventory.objects.filter(
         player=player,
         item__item_type='potion'
     ).select_related('item')
-    
+
     result = []
     for inv in potions:
         result.append({
@@ -654,7 +676,7 @@ def get_potions(request):
             'effect_value': inv.item.effect_value,
             'quantity': inv.quantity,
         })
-    
+
     return Response({'potions': result})
 
 
@@ -662,44 +684,45 @@ def get_potions(request):
 def buy_potion(request):
     """Купить зелье у торговца"""
     potion_slug = request.data.get('potion_slug')
-    
+
     if not potion_slug:
         return Response({'error': 'Не указан potion_slug'}, status=400)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     try:
         item = Item.objects.get(slug=potion_slug, item_type='potion')
     except Item.DoesNotExist:
         return Response({'error': 'Зелье не найдено'}, status=404)
-    
+
     if player.gold < item.price:
         return Response({
             'error': f'Нужно {item.price} золота (у тебя {player.gold})',
         }, status=400)
-    
+
     inv, created = Inventory.objects.get_or_create(
         player=player,
         item=item,
         defaults={'quantity': 0}
     )
-    
+
     if inv.quantity >= 10:
         return Response({'error': 'Максимум 10 зелий в инвентаре'}, status=400)
-    
+
     player.gold -= item.price
     inv.quantity += 1
     inv.save()
     player.save()
-    
+
     return Response({
         'message': f'Куплено: {item.name}',
         'player_gold': player.gold,
         'quantity': inv.quantity,
     })
+
 
 @api_view(['GET'])
 def traders_list(request, location_slug):
@@ -708,9 +731,9 @@ def traders_list(request, location_slug):
         location = Location.objects.get(slug=location_slug)
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
-    
+
     traders = location.traders.filter(is_active=True)
-    
+
     return Response({
         'location': location.name,
         'traders': [
@@ -734,7 +757,7 @@ def trader_detail(request, slug):
         trader = Trader.objects.get(slug=slug, is_active=True)
     except Trader.DoesNotExist:
         return Response({'error': 'Торговец не найден'}, status=404)
-    
+
     items = []
     for item in trader.items.all():
         items.append({
@@ -758,7 +781,7 @@ def trader_detail(request, slug):
             'required_level': item.required_level,
             'required_classes': [c.name for c in item.required_classes.all()],
         })
-    
+
     return Response({
         'trader': {
             'slug': trader.slug,
@@ -774,33 +797,33 @@ def trader_detail(request, slug):
 def trader_buy(request, slug):
     """Купить предмет у торговца"""
     item_slug = request.data.get('item_slug')
-    
+
     if not item_slug:
         return Response({'error': 'Не указан item_slug'}, status=400)
-    
+
     try:
         trader = Trader.objects.get(slug=slug, is_active=True)
     except Trader.DoesNotExist:
         return Response({'error': 'Торговец не найден'}, status=404)
-    
+
     try:
         item = trader.items.get(slug=item_slug)
     except Item.DoesNotExist:
         return Response({'error': 'Товар не найден у этого торговца'}, status=404)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     if player.gold < item.price:
         return Response({
             'error': f'Нужно {item.price} золота (у тебя {player.gold})'
         }, status=400)
-    
+
     player.gold -= item.price
     player.save()
-    
+
     inv, created = Inventory.objects.get_or_create(
         player=player,
         item=item,
@@ -808,7 +831,7 @@ def trader_buy(request, slug):
     )
     inv.quantity += 1
     inv.save()
-    
+
     return Response({
         'message': f'Куплено: {item.name}',
         'player_gold': player.gold,
@@ -823,11 +846,11 @@ def player_inventory(request):
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     inv_items = Inventory.objects.filter(
         player=player
     ).select_related('item')
-    
+
     inv_items = inv_items.filter(is_equipped=False)
 
     result = []
@@ -845,7 +868,6 @@ def player_inventory(request):
             'image_path': item.image_path,
             'equip_slot': item.equip_slot,
             'required_level': item.required_level,
-            'is_equipped': inv.is_equipped,
             'required_classes': [c.name for c in item.required_classes.all()],
             'bonus_strength': item.bonus_strength,
             'bonus_agility': item.bonus_agility,
@@ -855,7 +877,7 @@ def player_inventory(request):
             'bonus_health': item.bonus_health,
             'bonus_mana': item.bonus_mana,
         })
-    
+
     return Response({'items': result})
 
 
@@ -863,38 +885,38 @@ def player_inventory(request):
 def player_equip(request):
     """Надеть предмет"""
     item_slug = request.data.get('item_slug')
-    
+
     if not item_slug:
         return Response({'error': 'Не указан item_slug'}, status=400)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     try:
         item = Item.objects.get(slug=item_slug)
     except Item.DoesNotExist:
         return Response({'error': 'Предмет не найден'}, status=404)
-    
+
     try:
         inv = Inventory.objects.get(player=player, item=item)
     except Inventory.DoesNotExist:
         return Response({'error': 'У тебя нет этого предмета'}, status=400)
-    
+
     if not item.equip_slot:
         return Response({'error': 'Этот предмет нельзя надеть'}, status=400)
-    
+
     if player.level < item.required_level:
         return Response({'error': f'Нужен уровень {item.required_level}'}, status=400)
-    
+
     allowed_classes = item.required_classes.all()
     if allowed_classes.exists():
         if not player.character_class:
             return Response({'error': 'Сначала выбери класс'}, status=400)
         if player.character_class not in allowed_classes:
             return Response({'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'}, status=400)
-    
+
     old_eq = EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).first()
     if old_eq and old_eq.item:
         old_item = old_eq.item
@@ -905,10 +927,10 @@ def player_equip(request):
         player.sanity -= old_item.bonus_sanity
         player.max_health -= old_item.bonus_health
         player.max_mana -= old_item.bonus_mana
-    
+
     EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
     EquipmentSlot.objects.create(player=player, slot=item.equip_slot, item=item)
-    
+
     player.strength += item.bonus_strength
     player.agility += item.bonus_agility
     player.intelligence += item.bonus_intelligence
@@ -917,11 +939,11 @@ def player_equip(request):
     player.max_health += item.bonus_health
     player.max_mana += item.bonus_mana
     player.save()
-    
+
     Inventory.objects.filter(player=player, item__equip_slot=item.equip_slot).update(is_equipped=False)
     inv.is_equipped = True
     inv.save()
-    
+
     return Response({'message': f'Надето: {item.name}', 'slot': item.equip_slot})
 
 
@@ -929,22 +951,21 @@ def player_equip(request):
 def player_unequip(request):
     """Снять предмет"""
     slot = request.data.get('slot')
-    
+
     if not slot:
         return Response({'error': 'Не указан slot'}, status=400)
-    
+
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     eq = EquipmentSlot.objects.filter(player=player, slot=slot).first()
     if not eq or not eq.item:
         return Response({'error': 'В этом слоте ничего нет'}, status=400)
-    
+
     item = eq.item
-    
-    # Вычитаем бонусы от предмета
+
     player.strength -= item.bonus_strength
     player.agility -= item.bonus_agility
     player.intelligence -= item.bonus_intelligence
@@ -952,37 +973,34 @@ def player_unequip(request):
     player.sanity -= item.bonus_sanity
     player.max_health -= item.bonus_health
     player.max_mana -= item.bonus_mana
-    
-    # 🆕 ПРОВЕРКА: не падаем ниже базовых статов класса
+
     if player.character_class:
-        if player.strength < player.character_class.base_strength: 
+        if player.strength < player.character_class.base_strength:
             player.strength = player.character_class.base_strength
-        if player.agility < player.character_class.base_agility: 
+        if player.agility < player.character_class.base_agility:
             player.agility = player.character_class.base_agility
-        if player.intelligence < player.character_class.base_intelligence: 
+        if player.intelligence < player.character_class.base_intelligence:
             player.intelligence = player.character_class.base_intelligence
-        if player.endurance < player.character_class.base_endurance: 
+        if player.endurance < player.character_class.base_endurance:
             player.endurance = player.character_class.base_endurance
-        if player.sanity < player.character_class.base_sanity: 
+        if player.sanity < player.character_class.base_sanity:
             player.sanity = player.character_class.base_sanity
     else:
-        # Если класса нет — ставим минимум 1
         if player.strength < 1: player.strength = 1
         if player.agility < 1: player.agility = 1
         if player.intelligence < 1: player.intelligence = 1
         if player.endurance < 1: player.endurance = 1
         if player.sanity < 1: player.sanity = 1
-    
-    # HP и MP не могут быть больше максимума, и не могут быть меньше 1
+
     if player.health > player.max_health: player.health = player.max_health
     if player.mana > player.max_mana: player.mana = player.max_mana
     if player.health < 1: player.health = 1
     if player.mana < 1: player.mana = 1
-    
+
     player.save()
     Inventory.objects.filter(player=player, item=item).update(is_equipped=False)
     eq.delete()
-    
+
     return Response({'message': 'Снято'})
 
 
@@ -993,19 +1011,19 @@ def player_equipment(request):
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
-    
+
     slots = EquipmentSlot.objects.filter(player=player).select_related('item')
-    
+
     result = {}
     for eq in slots:
         result[eq.slot] = {
             'slug': eq.item.slug if eq.item else None,
             'name': eq.item.name if eq.item else None,
             'icon': eq.item.icon if eq.item else None,
-            'rarity': eq.item.rarity if eq.item else None,         
+            'rarity': eq.item.rarity if eq.item else None,
             'equip_slot': eq.slot,
             'image_path': eq.item.image_path if eq.item else None,
-            'bonus_strength': eq.item.bonus_strength if eq.item else 0, 
+            'bonus_strength': eq.item.bonus_strength if eq.item else 0,
             'bonus_endurance': eq.item.bonus_endurance if eq.item else 0,
             'bonus_agility': eq.item.bonus_agility if eq.item else 0,
             'bonus_intelligence': eq.item.bonus_intelligence if eq.item else 0,
@@ -1013,8 +1031,9 @@ def player_equipment(request):
             'bonus_health': eq.item.bonus_health if eq.item else 0,
             'bonus_mana': eq.item.bonus_mana if eq.item else 0,
         }
-    
+
     return Response({'equipment': result})
+
 
 @api_view(['GET'])
 def location_enemies(request, slug):
@@ -1023,9 +1042,9 @@ def location_enemies(request, slug):
         location = Location.objects.get(slug=slug)
     except Location.DoesNotExist:
         return Response({'error': 'Локация не найдена'}, status=404)
-    
+
     enemies = location.enemies.all()
-    
+
     result = []
     for enemy in enemies:
         result.append({
@@ -1035,8 +1054,9 @@ def location_enemies(request, slug):
             'hp': enemy.health,
             'icon': '👹',
         })
-        
+
     return Response({'enemies': result})
+
 
 @api_view(['POST'])
 def claim_offline_progress(request):
@@ -1055,7 +1075,7 @@ def claim_offline_progress(request):
 
     max_hours = 12
     hours_to_reward = min(hours_passed, max_hours)
-    
+
     gold_reward = hours_to_reward * player.offline_gold_rate
 
     player.gold += gold_reward
@@ -1077,7 +1097,7 @@ def claim_offline_progress(request):
 class NPCDetailView(APIView):
     """Получить NPC и его диалоги"""
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request, npc_slug):
         npc = get_object_or_404(NPC, slug=npc_slug)
         serializer = NPCSerializer(npc)
@@ -1087,84 +1107,73 @@ class NPCDetailView(APIView):
 class PlayerQuestsView(APIView):
     """Получить список всех квестов игрока (в процессе и готовых к сдаче)"""
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         player = request.user.player
         quests = PlayerQuest.objects.filter(player=player).exclude(status='completed')
         serializer = PlayerQuestSerializer(quests, many=True)
-        print("=== СЫРЫЕ ДАННЫЕ АКТИВНЫХ КВЕСТОВ ===")
-        print(serializer.data)
         return Response(serializer.data)
+
 
 class AllQuestsView(APIView):
     """Получить список ВСЕХ квестов в игре (для вкладки 'Общие')"""
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         player = request.user.player
-        
-        # 1. Берем все квесты, которые подходят по уровню
+
         all_quests = Quest.objects.filter(required_level__lte=player.level).order_by('required_level')
-        
-        # 2. Получаем все записи квестов этого игрока
+
         player_quests = PlayerQuest.objects.filter(player=player)
-        
-        # 3. Разделяем на "взятые сейчас" и "уже завершенные"
+
         taken_ids = set()
         completed_ids = set()
-        
+
         for pq in player_quests:
             if pq.status == 'completed':
                 completed_ids.add(pq.quest_id)
             else:
                 taken_ids.add(pq.quest_id)
-        
-        # 🆕 ДОБАВЬ ЭТИ ПРИНТЫ
-        print(f"=== ЗАВЕРШЕННЫЕ КВЕСТЫ ИГРОКА (ID): {completed_ids} ===")
-        print(f"=== ВЗЯТЫЕ КВЕСТЫ ИГРОКА (ID): {taken_ids} ===")
+
         serializer = AllQuestsSerializer(all_quests, many=True)
         data = serializer.data
-        
+
         filtered_data = []
         for quest_data in data:
             quest_id = quest_data['id']
             quest_obj = all_quests.get(id=quest_id)
-            
-            # ГЛАВНАЯ ЛОГИКА:
-            # Если квест уже завершен И он НЕ повторяемый — мы его скрываем (не добавляем в ответ)
+
             if quest_id in completed_ids and not quest_obj.is_repeatable:
                 continue
-            
-            # Помечаем, взят ли квест сейчас
+
             quest_data['is_taken'] = quest_id in taken_ids
-            # Плашка NEW (если не взят и не завершен)
             quest_data['is_new'] = (quest_id not in taken_ids) and (quest_id not in completed_ids)
-            
+
             filtered_data.append(quest_data)
-            
+
         return Response(filtered_data)
 
 
 class AcceptQuestView(APIView):
     """Взять квест у NPC"""
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request):
         player = request.user.player
         quest_id = request.data.get('quest_id')
-        
+
         quest = get_object_or_404(Quest, id=quest_id)
-        
+
         if player.level < quest.required_level:
             return Response({'error': f'Нужен {quest.required_level} уровень'}, status=400)
-            
+
         if PlayerQuest.objects.filter(player=player, quest=quest).exists():
             return Response({'error': 'Квест уже взят'}, status=400)
-            
+
         pq = PlayerQuest.objects.create(player=player, quest=quest)
-        
+
         return Response({
-            'success': True, 
+            'success': True,
             'message': 'Квест принят',
             'quest_id': pq.id
         })
@@ -1173,43 +1182,40 @@ class AcceptQuestView(APIView):
 class CompleteQuestView(APIView):
     """Сдать квест NPC и получить награду"""
     permission_classes = [IsAuthenticated]
-    
+
     def post(self, request):
         player = request.user.player
         player_quest_id = request.data.get('player_quest_id')
-        
+
         pq = get_object_or_404(PlayerQuest, id=player_quest_id, player=player)
-        
+
         if pq.status != 'ready':
             return Response({'error': 'Квест еще не выполнен'}, status=400)
-            
+
         quest = pq.quest
-        
-        # 1. Выдаем опыт и золото
+
         player.experience += quest.reward_exp
         player.gold += quest.reward_gold
-        
-        # 2. Выдаем предметы и собираем их в список для ответа
+
         dropped_items = []
-        
+
         if quest.reward_item and quest.reward_item_qty > 0:
             inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_item, defaults={'quantity': 0})
             inv.quantity += quest.reward_item_qty
             inv.save()
-            
-            # Добавляем в список, чтобы Flutter показал его в окне
+
             dropped_items.append({
                 'slug': quest.reward_item.slug,
                 'name': quest.reward_item.name,
                 'quantity': quest.reward_item_qty,
                 'rarity': quest.reward_item.rarity,
             })
-            
+
         if quest.reward_resource and quest.reward_resource_qty > 0:
             inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_resource, defaults={'quantity': 0})
             inv.quantity += quest.reward_resource_qty
             inv.save()
-            
+
             dropped_items.append({
                 'slug': quest.reward_resource.slug,
                 'name': quest.reward_resource.name,
@@ -1218,21 +1224,20 @@ class CompleteQuestView(APIView):
             })
 
         player.save()
-        
-        # 3. Отмечаем квест выполненным
+
         pq.status = 'completed'
         pq.completed_at = timezone.now()
         pq.save()
-        
-        # 4. Возвращаем всё во Flutter
+
         return Response({
-            'success': True, 
+            'success': True,
             'message': 'Квест сдан!',
             'exp': quest.reward_exp,
             'gold': quest.reward_gold,
-            'dropped_items': dropped_items  # <-- ВОТ ЭТО ГЛАВНОЕ
+            'dropped_items': dropped_items
         })
-    
+
+
 # ==========================================
 # 🛠 API ДЛЯ КРАФТА
 # ==========================================
@@ -1250,7 +1255,6 @@ def get_npc_recipes(request, npc_slug):
     except NPC.DoesNotExist:
         return Response({'error': 'NPC не найден'}, status=404)
 
-    # Проверка уровня
     if player.level < 7:
         return Response({
             'error': 'Достигните 7 уровня, чтобы крафтить предметы.',
@@ -1258,9 +1262,8 @@ def get_npc_recipes(request, npc_slug):
             'player_level': player.level
         }, status=403)
 
-    # Получаем ТОЛЬКО те рецепты, которые игрок ИЗУЧИЛ (есть в PlayerRecipe)
     learned_recipes = PlayerRecipe.objects.filter(
-        player=player, 
+        player=player,
         recipe__npc=npc
     ).select_related('recipe', 'recipe__result_item')
 
@@ -1268,14 +1271,12 @@ def get_npc_recipes(request, npc_slug):
     for pr in learned_recipes:
         recipe = pr.recipe
         result_item = recipe.result_item
-        
-        # Собираем ингредиенты
+
         ingredients = []
         for ing in recipe.ingredients.all():
-            # Проверяем, сколько есть у игрока
             inv = Inventory.objects.filter(player=player, item=ing.item).first()
             has_qty = inv.quantity if inv else 0
-            
+
             ingredients.append({
                 'slug': ing.item.slug,
                 'name': ing.item.name,
@@ -1301,6 +1302,7 @@ def get_npc_recipes(request, npc_slug):
 
     return Response({'recipes': recipes_data})
 
+
 @api_view(['POST'])
 def learn_recipe(request):
     """Изучение рецепта из свитка"""
@@ -1316,17 +1318,14 @@ def learn_recipe(request):
     if not scroll_slug:
         return Response({'error': 'Не указан scroll_slug'}, status=400)
 
-    # Ищем рецепт по свитку
     try:
         recipe = Recipe.objects.get(scroll_item__slug=scroll_slug)
     except Recipe.DoesNotExist:
         return Response({'error': 'Этот свиток не открывает никаких рецептов'}, status=404)
 
-    # Проверяем, не изучен ли уже
     if PlayerRecipe.objects.filter(player=player, recipe=recipe).exists():
         return Response({'error': 'Этот рецепт уже изучен'}, status=400)
 
-    # Проверяем наличие свитка в инвентаре
     try:
         inv = Inventory.objects.get(player=player, item=recipe.scroll_item)
     except Inventory.DoesNotExist:
@@ -1334,13 +1333,11 @@ def learn_recipe(request):
     if inv.quantity <= 0:
         return Response({'error': 'У вас нет этого свитка'}, status=400)
 
-    # Проверяем золото (если требуется)
     if player.gold < recipe.gold_cost:
         return Response({'error': f'Не хватает золота. Нужно: {recipe.gold_cost}'}, status=400)
 
-    # --- ВСЕ ОК, СПИСЫВАЕМ ---
     player.gold -= recipe.gold_cost
-    
+
     inv.quantity -= 1
     if inv.quantity <= 0:
         inv.delete()
@@ -1349,7 +1346,6 @@ def learn_recipe(request):
 
     player.save()
 
-    # Добавляем рецепт в изученные
     PlayerRecipe.objects.create(player=player, recipe=recipe)
 
     return Response({
@@ -1376,16 +1372,13 @@ def craft_item(request):
     except Recipe.DoesNotExist:
         return Response({'error': 'Рецепт не найден'}, status=404)
 
-    # Проверяем, изучен ли рецепт
     player_recipe = PlayerRecipe.objects.filter(player=player, recipe=recipe).first()
     if not player_recipe:
         return Response({'error': 'Вы не изучили этот рецепт'}, status=403)
 
-    # Проверяем уровень
     if player.level < recipe.required_level:
         return Response({'error': f'Нужен {recipe.required_level} уровень'}, status=400)
 
-    # Проверяем наличие ВСЕХ ингредиентов
     missing_ingredients = []
     for ing in recipe.ingredients.all():
         inv = Inventory.objects.filter(player=player, item=ing.item).first()
@@ -1398,7 +1391,6 @@ def craft_item(request):
             'error': 'Не хватает ресурсов: ' + ', '.join(missing_ingredients)
         }, status=400)
 
-    # --- ВСЕ ОК, СПИСЫВАЕМ РЕСУРСЫ ---
     for ing in recipe.ingredients.all():
         inv = Inventory.objects.get(player=player, item=ing.item)
         inv.quantity -= ing.quantity
@@ -1407,14 +1399,12 @@ def craft_item(request):
         else:
             inv.save()
 
-    # Выдаем предмет
     result_inv, created = Inventory.objects.get_or_create(
         player=player, item=recipe.result_item, defaults={'quantity': 0}
     )
     result_inv.quantity += recipe.result_quantity
     result_inv.save()
 
-    # 🆕 УДАЛЯЕМ ИЗУЧЕННЫЙ РЕЦЕПТ (он "сгорает")
     player_recipe.delete()
 
     return Response({
@@ -1438,20 +1428,16 @@ def get_player_scrolls(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    # Ищем в инвентаре предметы, у которых есть привязанный рецепт
-    # (то есть те, которые открывают крафт)
     scrolls = Inventory.objects.filter(
-        player=player, 
-        item__learns_recipes__isnull=False # <--- Связь с нашей моделью Recipe
+        player=player,
+        item__learns_recipes__isnull=False
     ).select_related('item')
 
     result = []
     for inv in scrolls:
         item = inv.item
-        # Получаем сам рецепт, который открывает этот свиток
-        recipe = item.learns_recipes.first() 
-        
-        # Проверяем, не изучен ли он уже
+        recipe = item.learns_recipes.first()
+
         is_learned = PlayerRecipe.objects.filter(player=player, recipe=recipe).exists()
 
         result.append({
@@ -1477,15 +1463,14 @@ def upgrade_stat(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    stat_name = request.data.get('stat') # 'strength', 'agility', 'intelligence', 'endurance', 'sanity'
-    
+    stat_name = request.data.get('stat')
+
     if player.stat_points <= 0:
         return Response({'error': 'У вас нет свободных очков'}, status=400)
 
     if stat_name not in ['strength', 'agility', 'intelligence', 'endurance', 'sanity']:
         return Response({'error': 'Неверная характеристика'}, status=400)
 
-    # Прибавляем стат
     current_val = getattr(player, stat_name)
     setattr(player, stat_name, current_val + 1)
     player.stat_points -= 1
@@ -1498,4 +1483,269 @@ def upgrade_stat(request):
         'new_value': getattr(player, stat_name),
     })
 
-# Тест автодеплоя: 27 октября 2026
+
+def admin_dashboard(request):
+    total_players = Player.objects.count()
+    total_gold = Player.objects.aggregate(Sum('gold'))['gold__sum'] or 0
+    total_guilds = Guild.objects.count()
+
+    context = {
+        'total_players': total_players,
+        'total_gold': total_gold,
+        'total_guilds': total_guilds,
+    }
+    return render(request, 'admin/dashboard.html', context)
+
+
+@staff_member_required
+def beautiful_dashboard(request):
+    total_players = Player.objects.count()
+    new_players = Player.objects.filter(created_at__gte=timezone.now() - timedelta(days=1)).count()
+    total_gold = Player.objects.aggregate(Sum('gold'))['gold__sum'] or 0
+    total_guilds = Guild.objects.count()
+
+    history = OnlineHistory.objects.filter(
+        timestamp__gte=timezone.now() - timedelta(hours=24)
+    ).order_by('timestamp')
+
+    labels = [h.timestamp.strftime('%H:%M') for h in history]
+    data = [h.online for h in history]
+
+    context = {
+        'total_players': total_players,
+        'new_players': new_players,
+        'total_gold': total_gold,
+        'total_guilds': total_guilds,
+        'labels': json.dumps(labels),
+        'data': json.dumps(data),
+    }
+    return render(request, 'dashboard.html', context)
+
+@staff_member_required
+def manage_roles(request):
+    if request.method == 'POST':
+        player_id = request.POST.get('player_id')
+        new_role = request.POST.get('role')
+        try:
+            player = Player.objects.get(id=player_id)
+            player.role = new_role
+            player.save()
+
+            # 🆕 Синхронизация с правами Django
+            if new_role == 'admin':
+                player.user.is_staff = True
+                player.user.is_superuser = True
+                player.user.save()
+                # Добавляем в группу "Администратор" (если есть)
+                admin_group, _ = Group.objects.get_or_create(name='Администратор')
+                player.user.groups.add(admin_group)
+            elif new_role == 'moderator':
+                player.user.is_staff = True
+                player.user.is_superuser = False
+                player.user.save()
+                # Добавляем в группу "Модератор"
+                mod_group, _ = Group.objects.get_or_create(name='Модератор')
+                player.user.groups.add(mod_group)
+            else:
+                # Если роль "Игрок" или "VIP" — снимаем права
+                player.user.is_staff = False
+                player.user.is_superuser = False
+                player.user.save()
+                # Убираем из групп
+                player.user.groups.remove(*player.user.groups.all())
+
+            messages.success(request, f'Роль игрока {player.user.username} изменена на {new_role}')
+        except Player.DoesNotExist:
+            messages.error(request, 'Игрок не найден')
+        return redirect('manage_roles')
+
+    players = Player.objects.select_related('user').all()
+    return render(request, 'admin/manage_roles.html', {'players': players})
+
+@staff_member_required
+def chat_moderation(request):
+    if request.method == 'POST':
+        report_id = request.POST.get('report_id')
+        player_id = request.POST.get('player_id')
+        action = request.POST.get('action')
+        reason = request.POST.get('reason', '')
+        duration = int(request.POST.get('duration', 0))
+
+        try:
+            player = Player.objects.get(id=player_id)
+            if action == 'ban':
+                player.is_banned = True
+                player.ban_until = timezone.now() + timedelta(hours=duration) if duration > 0 else None
+                player.ban_reason = reason
+                player.save()
+            elif action == 'mute':
+                player.mute_until = timezone.now() + timedelta(hours=duration) if duration > 0 else None
+                player.ban_reason = reason
+                player.save()
+            elif action == 'unban':
+                player.is_banned = False
+                player.ban_until = None
+                player.mute_until = None
+                player.ban_reason = ''
+                player.save()
+
+            if report_id:
+                report = PlayerReport.objects.get(id=report_id)
+                report.is_resolved = True
+                report.moderator_comment = f'Действие: {action}. Причина: {reason}'
+                report.save()
+
+            messages.success(request, f'Действие "{action}" применено к {player.user.username}')
+        except (Player.DoesNotExist, PlayerReport.DoesNotExist):
+            messages.error(request, 'Игрок или жалоба не найдены')
+        return redirect('chat_moderation')
+
+    # Показываем только НЕОБРАБОТАННЫЕ жалобы
+    reports = PlayerReport.objects.filter(is_resolved=False).select_related('reporter__user', 'target__user').order_by('-created_at')
+
+    # Плюс список всех игроков для ручного поиска
+    all_players = Player.objects.select_related('user').order_by('-level')
+
+    return render(request, 'admin/chat_moderation.html', {
+        'reports': reports,
+        'all_players': all_players,
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def report_player(request):
+    """Отправить жалобу на игрока"""
+    try:
+        reporter = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    target_username = request.data.get('target_username')
+    reason = request.data.get('reason', 'other')
+    comment = request.data.get('comment', '')
+
+    if not target_username:
+        return Response({'error': 'Не указан ник игрока'}, status=400)
+
+    if target_username == reporter.user.username:
+        return Response({'error': 'Нельзя пожаловаться на самого себя'}, status=400)
+
+    try:
+        target = Player.objects.get(user__username=target_username)
+    except Player.DoesNotExist:
+        return Response({'error': 'Игрок с таким ником не найден'}, status=404)
+
+    # Проверяем, не отправлял ли он уже жалобу на этого игрока за последние 24 часа
+    one_minute_ago = timezone.now() - timedelta(minutes=1)
+    if PlayerReport.objects.filter(reporter=reporter, target=target, created_at__gte=one_minute_ago).exists():
+        return Response({'error': 'Вы уже жаловались на этого игрока. Подождите минуту.'}, status=400)
+
+    # Создаем жалобу
+    report = PlayerReport.objects.create(
+        reporter=reporter,
+        target=target,
+        reason=reason,
+        comment=comment
+    )
+
+    return Response({
+        'success': True,
+        'message': 'Жалоба отправлена. Модераторы проверят её.',
+        'report_id': report.id
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_notifications(request):
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    notes = PlayerNotification.objects.filter(player=player)[:50]
+    
+    result = []
+    for n in notes:
+        result.append({
+            'id': n.id,
+            'title': n.title,
+            'message': n.message,
+            'is_read': n.is_read,
+            'created_at': n.created_at.strftime('%d.%m.%Y %H:%M'),
+        })
+
+    return Response({'notifications': result})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_notifications_read(request):
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    PlayerNotification.objects.filter(player=player, is_read=False).update(is_read=True)
+    return Response({'success': True})
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_chat_history(request):
+    # Берем последние 50 сообщений
+    messages = GlobalChatMessage.objects.select_related('player__user').order_by('-created_at')[:50]
+    
+    result = []
+    for msg in reversed(messages): # Переворачиваем, чтобы старые были сверху
+        local_dt = timezone.localtime(msg.created_at)  # 🆕 UTC → Europe/Moscow
+        result.append({
+            'id': msg.id,
+            'username': msg.player.user.username,
+            'message': msg.message,
+            'role': msg.player.role,
+            'time': local_dt.strftime('%H:%M'),
+            'created_at': msg.created_at.isoformat(),  # 🆕 для клиента (ISO 8601 UTC)
+        })
+    
+    return Response({'messages': result})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def delete_account(request):
+    """
+    Мягкое удаление аккаунта (анонимизация).
+    Требуется подтверждение пароля для безопасности.
+    """
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    password = request.data.get('password')
+    
+    if not password or not request.user.check_password(password):
+        return Response({'error': 'Неверный пароль'}, status=400)
+
+    user = request.user
+    
+    # 1. Анонимизируем User
+    user.is_active = False
+    user.username = f"DeletedUser_{user.id}_{uuid.uuid4().hex[:4]}"
+    user.email = f"deleted_{user.id}@deleted.local"
+    user.set_unusable_password()
+    user.save()
+
+    # 2. Анонимизируем Player (если есть специфичные поля)
+    player.email_verified = False
+    player.email_verification_token = ''
+    player.is_banned = True # Чтобы на всякий случай заблокировать
+    player.ban_reason = 'Аккаунт удален пользователем'
+    player.save()
+
+    # 3. Логируем (когда сделаем аудит, перенесем туда)
+    print(f"=== АККАУНТ УДАЛЕН: ID {user.id} ===")
+
+    return Response({
+        'success': True, 
+        'message': 'Аккаунт успешно удален. Все персональные данные анонимизированы.'
+    })

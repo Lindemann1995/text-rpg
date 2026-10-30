@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: text_rpg_dev_db
+      POSTGRES_USER: text_rpg_dev_user
+      POSTGRES_PASSWORD: Harperzore
+    volumes:
+      - dev_postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5433:5432" # <-- Снаружи 5433, чтобы не конфликтовать с продом
+    restart: always
+
+  redis:
+    image: redis:7
+    ports:
+      - "6380:6379" # <-- Снаружи 6380
+    restart: always
+
+  web:
+    build: .
+    command: daphne -b 0.0.0.0 -p 8002 config.asgi:application
+    volumes:
+      - .:/app
+    ports:
+      - "8003:8002" # <-- Наружу 8003 (dev), внутри 8002
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+    restart: always
+
+volumes:
+  dev_postgres_data:

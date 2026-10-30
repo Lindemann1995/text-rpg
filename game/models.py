@@ -59,13 +59,20 @@ class Player(models.Model):
     experience_to_next = models.IntegerField(default=100, verbose_name='Опыт до след. уровня')
     last_offline_claim = models.DateTimeField(default=timezone.now, verbose_name='Время последнего сбора оффлайн-награды')
     offline_gold_rate = models.IntegerField(default=10, verbose_name='Золота в час (оффлайн)')
-
+    privacy_accepted_at = models.DateTimeField(null=True, blank=True, verbose_name='Дата принятия политики')
+    privacy_version = models.CharField(max_length=10, default='1.0', verbose_name='Версия политики')
     # Статы
     strength = models.IntegerField(default=10, verbose_name='Сила')
     agility = models.IntegerField(default=10, verbose_name='Ловкость')
     intelligence = models.IntegerField(default=10, verbose_name='Интеллект')
     endurance = models.IntegerField(default=10, verbose_name='Выносливость')
     sanity = models.IntegerField(default=10, verbose_name='Рассудок')
+    
+    # 🆕 Модерация
+    is_banned = models.BooleanField(default=False, verbose_name='Забанен')
+    ban_until = models.DateTimeField(null=True, blank=True, verbose_name='Бан до')
+    mute_until = models.DateTimeField(null=True, blank=True, verbose_name='Мут до')
+    ban_reason = models.CharField(max_length=255, blank=True, verbose_name='Причина бана/мута')
     
     stat_points = models.IntegerField(
         default=0, 
@@ -93,6 +100,7 @@ class Player(models.Model):
     ROLE_CHOICES = [
         ('player', 'Игрок'),
         ('vip', 'VIP'),
+        ('moderator', 'Модератор'),
         ('guild_leader', 'Лидер гильдии'),
         ('admin', 'Администратор'),
     ]
@@ -140,10 +148,14 @@ class Player(models.Model):
     # Метаданные.
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Обновлён')
+    
+    # 🆕 ДОБАВЛЕНО ДЛЯ РЕГЕНЕРАЦИИ:
+    last_regen_at = models.DateTimeField(default=timezone.now, verbose_name='Последняя регенерация')
+    
     enemies_killed = models.IntegerField(default=0, verbose_name='Убито врагов')
     last_seen = models.DateTimeField(auto_now=True, verbose_name='Последняя активность')
 
-        # Внутри класса Player
+    # Внутри класса Player
     @property
     def effective_max_health(self):
         """Возвращает максимальное HP с учетом баффов гильдии."""
@@ -506,8 +518,7 @@ class Location(models.Model):
     min_level = models.IntegerField(default=1, verbose_name='Мин. уровень')
     is_available = models.BooleanField(default=True, verbose_name='Доступна')
     
-    map_x = models.IntegerField(default=0, verbose_name='X на карте')
-    map_y = models.IntegerField(default=0, verbose_name='Y на карте')
+    # Исправлены дубликаты map_x и map_y
     map_x = models.IntegerField(default=0, verbose_name='X на карте')
     map_y = models.IntegerField(default=0, verbose_name='Y на карте')
     
@@ -1024,7 +1035,6 @@ class PlayerRecipe(models.Model):
     def __str__(self):
         return f'{self.player.user.username} изучил {self.recipe.name}'
 
-# game/models.py
 
 class CombatSettings(models.Model):
     """Настройки боевой системы (для гибкого баланса из админки)"""
@@ -1065,3 +1075,54 @@ class CombatSettings(models.Model):
 
     def __str__(self):
         return "Настройки боевой системы"
+
+
+class OnlineHistory(models.Model):
+    """История онлайна для графика"""
+    timestamp = models.DateTimeField(auto_now_add=True, verbose_name="Время")
+    online = models.IntegerField(default=0, verbose_name="Онлайн")
+    
+    class Meta:
+        verbose_name = "История онлайна"
+        verbose_name_plural = "История онлайна"
+        ordering = ['-timestamp']
+
+
+class PlayerReport(models.Model):
+    """Жалоба на игрока"""
+    REPORT_REASONS = [
+        ('toxic', 'Оскорбления / Токсичность'),
+        ('spam', 'Спам / Реклама'),
+        ('cheat', 'Читерство / Взлом'),
+        ('other', 'Другое'),
+    ]
+    
+    reporter = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='reports_sent', verbose_name='Кто пожаловался')
+    target = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='reports_received', verbose_name='На кого жалуются')
+    reason = models.CharField(max_length=20, choices=REPORT_REASONS, verbose_name='Причина')
+    comment = models.TextField(blank=True, verbose_name='Комментарий')
+    
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создана')
+    is_resolved = models.BooleanField(default=False, verbose_name='Обработана')
+    moderator_comment = models.TextField(blank=True, verbose_name='Ответ модератора')
+    
+    class Meta:
+        verbose_name = 'Жалоба'
+        verbose_name_plural = 'Жалобы'
+        ordering = ['-created_at']
+
+class PlayerNotification(models.Model):
+    """Уведомления для игроков (ответы модераторов, системные сообщения)"""
+    player = models.ForeignKey(Player, on_delete=models.CASCADE, related_name='notifications', verbose_name='Игрок')
+    title = models.CharField(max_length=100, verbose_name='Заголовок')
+    message = models.TextField(verbose_name='Текст уведомления')
+    is_read = models.BooleanField(default=False, verbose_name='Прочитано')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата')
+
+    class Meta:
+        verbose_name = 'Уведомление'
+        verbose_name_plural = 'Уведомления'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.player.user.username} - {self.title}'

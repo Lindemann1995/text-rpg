@@ -1,0 +1,15 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+    {# 1. Сначала выводим стандартный дашборд Onyx #}
+    {{ block.super }}
+
+    {# 2. Затем добавляем нашу карточку с онлайном #}
+    <div class="module" style="margin-top: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
+        <h2>Сейчас в игре</h2>
+        <p style="font-size: 24px; font-weight: bold; color: #7c3aed;">
+            {{ online_players }} игроков онлайн
+        </p>
+        <p style="color: #666; font-size: 12px;">(активность за последние 5 минут)</p>
+    </div>
+{% endblock %}

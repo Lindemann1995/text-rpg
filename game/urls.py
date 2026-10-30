@@ -3,6 +3,7 @@ from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
+from .views import report_player
 from . import views
 # 🆕 ИМПОРТИРУЕМ КЛАССЫ ДЛЯ КВЕСТОВ
 from .views import (
@@ -10,18 +11,23 @@ from .views import (
     PlayerQuestsView, 
     AcceptQuestView, 
     CompleteQuestView,
-    AllQuestsView
+    AllQuestsView,
+    delete_account, 
 )
 
 app_name = 'game'
 
 urlpatterns = [
     # Сцены
+    path('chat/history/', views.get_chat_history, name='chat_history'),
+    path('player/notifications/', views.get_notifications, name='get_notifications'),
+    path('player/notifications/read/', views.mark_notifications_read, name='mark_notifications_read'),
+    path('player/report/', report_player, name='report_player'),
     path('start/', views.start_scene, name='start_scene'),
     path('scene/current/', views.current_scene, name='current_scene'),
     path('scene/choose/', views.choose_in_scene, name='choose_in_scene'),
     path('scene/<slug:slug>/', views.get_scene, name='get_scene'),
-    
+    path('player/delete/', delete_account, name='delete_account'),
     # Бой
     path('combat/start/', views.combat_start, name='combat_start'),
     path('combat/<int:combat_id>/action/', views.combat_action, name='combat_action'),
