@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 jobs:
   deploy:
@@ -12,13 +13,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Deploy via SSH
+      - name: Deploy to PROD (main)
+        if: github.ref == 'refs/heads/main'
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "🚀 Деплой на PROD (text-rpg)"
-            cd /home/dev/text-rpg/
-            ./deploy_game.sh
+            /home/dev/text-rpg/deploy_prod.sh
+
+      - name: Deploy to DEV (dev)
+        if: github.ref == 'refs/heads/dev'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            /home/dev/text-rpg-dev/deploy_game.sh
