@@ -175,6 +175,36 @@ class Player(models.Model):
             return int(self.max_mana * bonuses['mp_multiplier'])
         except Exception:
             return self.max_mana
+
+    def add_experience(self, amount):
+        """
+        Начисляет опыт, проверяет повышение уровня и обновляет статы.
+        Возвращает True, если уровень повысился.
+        """
+        self.experience += amount
+        leveled_up = False
+
+        # Пока накопленного опыта хватает на следующий уровень
+        while self.experience >= self.experience_to_next:
+            self.experience -= self.experience_to_next
+            self.level += 1
+            self.stat_points += 3  # 🆕 Даем 3 очка характеристик за уровень
+            
+            # 🆕 Увеличиваем максимальные ресурсы за уровень (по желанию)
+            self.max_health += 10
+            self.max_mana += 5
+            
+            # Восстанавливаем здоровье при повышении уровня
+            self.health = self.max_health
+            self.mana = self.max_mana
+
+            # Увеличиваем планку для следующего уровня (например, +50% опыта)
+            self.experience_to_next = int(self.experience_to_next * 1.5)
+            
+            leveled_up = True
+
+        self.save()
+        return leveled_up
     
     class Meta:
         verbose_name = 'Игрок'

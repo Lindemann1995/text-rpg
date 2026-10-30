@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: text_rpg_db
+      POSTGRES_USER: text_rpg_user
+      POSTGRES_PASSWORD: Harperzore
+    volumes:
+      - prod_postgres_data:/var/lib/postgresql/data/
+    restart: always
+
+  redis:
+    image: redis:7
+    restart: always
+
+  web:
+    build: .
+    command: daphne -b 0.0.0.0 -p 8002 config.asgi:application
+    volumes:
+      - .:/app
+    ports:
+      - "8002:8002"
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+    restart: always
+
+volumes:
+  prod_postgres_data:

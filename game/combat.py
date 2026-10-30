@@ -197,7 +197,7 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
         real_xp = xp_reward
         real_gold = gold_reward
 
-        player.experience += xp_reward
+        # 🆕 Начисляем золото (опыт начислим через метод)
         player.gold += gold_reward
         
         # 2. СЧЕТЧИК УБИЙСТВ
@@ -248,16 +248,10 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
                     'bonus_health': loot.item.bonus_health,
                 })
         
-        # 4. Повышение уровня
-        while player.experience >= player.experience_to_next:
-            player.experience -= player.experience_to_next
-            player.level += 1
-            player.experience_to_next = int(100 * (player.level ** 1.8))
-            player.max_health += 10
-            
-            # 🆕 ВМЕСТО АВТОМАТИЧЕСКОЙ ПРИБАВКИ ДАЕМ ОЧКИ
-            player.stat_points += 3 
-            print(f"=== УРОВЕНЬ ПОВЫШЕН: {player.user.username} теперь {player.level} уровня. Получено 3 очка характеристик ===")
+        # 4. 🆕 Начисление опыта и проверка повышения уровня
+        leveled_up = player.add_experience(xp_reward)
+        if leveled_up:
+            print(f"=== УРОВЕНЬ ПОВЫШЕН: {player.user.username} теперь {player.level} уровня ===")
             
         # ВАЖНО: Сохраняем игрока в конце
         player.save()
@@ -267,7 +261,6 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
         player.save()
         
     return dropped_items, real_xp, real_gold
-
 
 def _update_kill_quests(player: Player, enemy: Enemy):
     """Обновляет прогресс квестов, где нужно убить этого моба"""

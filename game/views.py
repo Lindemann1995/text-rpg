@@ -1194,8 +1194,13 @@ class CompleteQuestView(APIView):
 
         quest = pq.quest
 
-        player.experience += quest.reward_exp
+
+        # 🆕 Начисляем опыт через метод, который проверяет уровень
+        player.add_experience(quest.reward_exp) 
+        
+        # 🆕 Опыт начислен, теперь просто добавляем золото
         player.gold += quest.reward_gold
+        player.save() # Сохраняем золото
 
         dropped_items = []
 
