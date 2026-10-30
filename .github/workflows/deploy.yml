@@ -21,7 +21,9 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            /home/dev/text-rpg/deploy_prod.sh
+            cd /home/dev/text-rpg/
+            git pull origin main
+            docker compose -f docker-compose.prod.yml up -d --build
 
       - name: Deploy to DEV (dev)
         if: github.ref == 'refs/heads/dev'
@@ -31,4 +33,6 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            /home/dev/text-rpg-dev/deploy_game.sh
+            cd /home/dev/text-rpg-dev/
+            git pull origin dev
+            docker compose -f docker-compose.dev.yml up -d --build
