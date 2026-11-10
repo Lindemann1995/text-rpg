@@ -10,14 +10,24 @@ services:
     volumes:
       - dev_postgres_data:/var/lib/postgresql/data/
     ports:
-      - "5433:5432" # <-- Снаружи 5433, чтобы не конфликтовать с продом
+      - "5433:5432"
     restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U text_rpg_dev_user -d text_rpg_dev_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7
     ports:
-      - "6380:6379" # <-- Снаружи 6380
+      - "6380:6379"
     restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   web:
     build: .
@@ -25,10 +35,12 @@ services:
     volumes:
       - .:/app
     ports:
-      - "8003:8002" # <-- Наружу 8003 (dev), внутри 8002
+      - "8003:8002"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     restart: always

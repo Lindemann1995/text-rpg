@@ -226,13 +226,9 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
             if roll <= drop_chance:
                 qty = random.randint(loot.quantity_min, loot.quantity_max)
                 
-                inv, created = Inventory.objects.get_or_create(
-                    player=player, 
-                    item=loot.item,
-                    defaults={'quantity': 0}
-                )
-                inv.quantity += qty
-                inv.save()
+                # 🆕 ИСПОЛЬЗУЕМ СЕРВИС
+                from game.services.inventory import add_item
+                add_item(player, loot.item, qty)
                 
                 dropped_items.append({
                     'slug': loot.item.slug,

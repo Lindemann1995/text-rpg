@@ -25,7 +25,7 @@ from guilds.services import get_guild_bonuses
 from .combat import start_combat, player_attack, player_defend, player_flee
 from .models import (
     Scene, Player, CharacterClass, Choice, Flag,
-    Location, Enemy, Combat, Item, Inventory,
+    Location, Enemy, Combat, Item, Inventory, InventoryInstance, # 🆕 Добавлен InventoryInstance
     Trader, EquipmentSlot,
     NPC, Quest, PlayerQuest, QuestLine, Recipe, RecipeIngredient, PlayerRecipe, OnlineHistory, PlayerReport, PlayerNotification,
 )
@@ -133,10 +133,13 @@ def register(request):
 
     try:
         starter_sword = Item.objects.get(slug='rusty_sword')
-        Inventory.objects.create(player=player, item=starter_sword, quantity=1, is_equipped=True)
-        EquipmentSlot.objects.create(player=player, slot='weapon', item=starter_sword)
-        player.strength += starter_sword.bonus_strength
-        player.save()
+        from game.services.inventory import add_item, equip_instance
+        
+        # Выдаем меч через сервис (создаст экземпляр)
+        instances = add_item(player, starter_sword, 1)
+        if instances and not isinstance(instances[0], Inventory):
+            # Сразу надеваем его
+            equip_instance(player, instances[0])
     except Item.DoesNotExist:
         print("ОШИБКА: Стартовый меч не найден в базе!")
 
@@ -703,24 +706,23 @@ def buy_potion(request):
             'error': f'Нужно {item.price} золота (у тебя {player.gold})',
         }, status=400)
 
-    inv, created = Inventory.objects.get_or_create(
-        player=player,
-        item=item,
-        defaults={'quantity': 0}
-    )
+    # Проверяем, сколько уже есть
+    existing_inv = Inventory.objects.filter(player=player, item=item).first()
+    current_qty = existing_inv.quantity if existing_inv else 0
 
-    if inv.quantity >= 10:
+    if current_qty >= 10:
         return Response({'error': 'Максимум 10 зелий в инвентаре'}, status=400)
 
     player.gold -= item.price
-    inv.quantity += 1
-    inv.save()
     player.save()
+    
+    from game.services.inventory import add_item
+    add_item(player, item, 1)
 
     return Response({
         'message': f'Куплено: {item.name}',
         'player_gold': player.gold,
-        'quantity': inv.quantity,
+        'quantity': current_qty + 1,
     })
 
 
@@ -824,18 +826,12 @@ def trader_buy(request, slug):
     player.gold -= item.price
     player.save()
 
-    inv, created = Inventory.objects.get_or_create(
-        player=player,
-        item=item,
-        defaults={'quantity': 0}
-    )
-    inv.quantity += 1
-    inv.save()
+    from game.services.inventory import add_item
+    add_item(player, item, 1)
 
     return Response({
         'message': f'Куплено: {item.name}',
         'player_gold': player.gold,
-        'quantity': inv.quantity,
     })
 
 
@@ -847,15 +843,16 @@ def player_inventory(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
+    result = []
+
+    # 1. Обычные предметы (стаки)
     inv_items = Inventory.objects.filter(
-        player=player
+        player=player, is_equipped=False
     ).select_related('item')
 
-    inv_items = inv_items.filter(is_equipped=False)
-
-    result = []
     for inv in inv_items:
         item = inv.item
+        display_quantity = 1 if item.equip_slot else inv.quantity
         result.append({
             'item_id': item.id,
             'slug': item.slug,
@@ -865,6 +862,7 @@ def player_inventory(request):
             'rarity': item.rarity,
             'quantity': inv.quantity,
             'is_equipped': inv.is_equipped,
+            'quantity': display_quantity,
             'image_path': item.image_path,
             'equip_slot': item.equip_slot,
             'required_level': item.required_level,
@@ -878,6 +876,33 @@ def player_inventory(request):
             'bonus_mana': item.bonus_mana,
         })
 
+    # 🆕 2. Уникальные экземпляры (шмот)
+    instances = InventoryInstance.objects.filter(player=player, is_equipped=False).select_related('item')
+    for inst in instances:
+        item = inst.item
+        result.append({
+            'item_id': item.id,
+            'slug': item.slug,
+            'instance_id': inst.id,  # 🆕 ID экземпляра для кнопки "Надеть"
+            'name': item.name,
+            'icon': item.icon,
+            'item_type': item.item_type,
+            'rarity': item.rarity,
+            'quantity': 1,
+            'is_equipped': False,
+            'image_path': item.image_path,
+            'equip_slot': item.equip_slot,
+            'required_level': item.required_level,
+            'required_classes': [c.name for c in item.required_classes.all()],
+            'bonus_strength': inst.get_effective_bonus('bonus_strength'),
+            'bonus_agility': inst.get_effective_bonus('bonus_agility'),
+            'bonus_intelligence': inst.get_effective_bonus('bonus_intelligence'),
+            'bonus_endurance': inst.get_effective_bonus('bonus_endurance'),
+            'bonus_sanity': inst.get_effective_bonus('bonus_sanity'),
+            'bonus_health': inst.get_effective_bonus('bonus_health'),
+            'bonus_mana': inst.get_effective_bonus('bonus_mana'),
+        })
+
     return Response({'items': result})
 
 
@@ -885,24 +910,29 @@ def player_inventory(request):
 def player_equip(request):
     """Надеть предмет"""
     item_slug = request.data.get('item_slug')
+    instance_id = request.data.get('instance_id') # 🆕 Фронтенд может передать конкретный ID
 
-    if not item_slug:
-        return Response({'error': 'Не указан item_slug'}, status=400)
+    if not item_slug and not instance_id:
+        return Response({'error': 'Не указан item_slug или instance_id'}, status=400)
 
     try:
         player = request.user.player
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    try:
-        item = Item.objects.get(slug=item_slug)
-    except Item.DoesNotExist:
-        return Response({'error': 'Предмет не найден'}, status=404)
+    if instance_id:
+        instance = InventoryInstance.objects.filter(id=instance_id, player=player, is_equipped=False).first()
+    else:
+        try:
+            item = Item.objects.get(slug=item_slug)
+        except Item.DoesNotExist:
+            return Response({'error': 'Предмет не найден'}, status=404)
+        instance = InventoryInstance.objects.filter(player=player, item=item, is_equipped=False).first()
+    
+    if not instance:
+        return Response({'error': 'У тебя нет этого предмета (или он уже надет)'}, status=400)
 
-    try:
-        inv = Inventory.objects.get(player=player, item=item)
-    except Inventory.DoesNotExist:
-        return Response({'error': 'У тебя нет этого предмета'}, status=400)
+    item = instance.item
 
     if not item.equip_slot:
         return Response({'error': 'Этот предмет нельзя надеть'}, status=400)
@@ -917,42 +947,20 @@ def player_equip(request):
         if player.character_class not in allowed_classes:
             return Response({'error': f'Этот предмет только для: {", ".join([c.name for c in allowed_classes])}'}, status=400)
 
-    old_eq = EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).first()
-    if old_eq and old_eq.item:
-        old_item = old_eq.item
-        player.strength -= old_item.bonus_strength
-        player.agility -= old_item.bonus_agility
-        player.intelligence -= old_item.bonus_intelligence
-        player.endurance -= old_item.bonus_endurance
-        player.sanity -= old_item.bonus_sanity
-        player.max_health -= old_item.bonus_health
-        player.max_mana -= old_item.bonus_mana
-
-    EquipmentSlot.objects.filter(player=player, slot=item.equip_slot).delete()
-    EquipmentSlot.objects.create(player=player, slot=item.equip_slot, item=item)
-
-    player.strength += item.bonus_strength
-    player.agility += item.bonus_agility
-    player.intelligence += item.bonus_intelligence
-    player.endurance += item.bonus_endurance
-    player.sanity += item.bonus_sanity
-    player.max_health += item.bonus_health
-    player.max_mana += item.bonus_mana
-    player.save()
-
-    Inventory.objects.filter(player=player, item__equip_slot=item.equip_slot).update(is_equipped=False)
-    inv.is_equipped = True
-    inv.save()
-
-    return Response({'message': f'Надето: {item.name}', 'slot': item.equip_slot})
+    from game.services.inventory import equip_instance
+    success = equip_instance(player, instance)
+    
+    if success:
+        return Response({'message': f'Надето: {item.name}', 'slot': item.equip_slot})
+    return Response({'error': 'Не удалось надеть предмет'}, status=500)
 
 
 @api_view(['POST'])
 def player_unequip(request):
     """Снять предмет"""
-    slot = request.data.get('slot')
+    slot_name = request.data.get('slot')
 
-    if not slot:
+    if not slot_name:
         return Response({'error': 'Не указан slot'}, status=400)
 
     try:
@@ -960,48 +968,16 @@ def player_unequip(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    eq = EquipmentSlot.objects.filter(player=player, slot=slot).first()
-    if not eq or not eq.item:
+    eq = EquipmentSlot.objects.filter(player=player, slot=slot_name).first()
+    if not eq or not eq.inventory_instance:
         return Response({'error': 'В этом слоте ничего нет'}, status=400)
 
-    item = eq.item
-
-    player.strength -= item.bonus_strength
-    player.agility -= item.bonus_agility
-    player.intelligence -= item.bonus_intelligence
-    player.endurance -= item.bonus_endurance
-    player.sanity -= item.bonus_sanity
-    player.max_health -= item.bonus_health
-    player.max_mana -= item.bonus_mana
-
-    if player.character_class:
-        if player.strength < player.character_class.base_strength:
-            player.strength = player.character_class.base_strength
-        if player.agility < player.character_class.base_agility:
-            player.agility = player.character_class.base_agility
-        if player.intelligence < player.character_class.base_intelligence:
-            player.intelligence = player.character_class.base_intelligence
-        if player.endurance < player.character_class.base_endurance:
-            player.endurance = player.character_class.base_endurance
-        if player.sanity < player.character_class.base_sanity:
-            player.sanity = player.character_class.base_sanity
-    else:
-        if player.strength < 1: player.strength = 1
-        if player.agility < 1: player.agility = 1
-        if player.intelligence < 1: player.intelligence = 1
-        if player.endurance < 1: player.endurance = 1
-        if player.sanity < 1: player.sanity = 1
-
-    if player.health > player.max_health: player.health = player.max_health
-    if player.mana > player.max_mana: player.mana = player.max_mana
-    if player.health < 1: player.health = 1
-    if player.mana < 1: player.mana = 1
-
-    player.save()
-    Inventory.objects.filter(player=player, item=item).update(is_equipped=False)
-    eq.delete()
-
-    return Response({'message': 'Снято'})
+    from game.services.inventory import unequip_instance
+    success = unequip_instance(eq.inventory_instance)
+    
+    if success:
+        return Response({'message': 'Снято'})
+    return Response({'error': 'Не удалось снять предмет'}, status=500)
 
 
 @api_view(['GET'])
@@ -1012,28 +988,79 @@ def player_equipment(request):
     except Player.DoesNotExist:
         return Response({'error': 'Профиль не найден'}, status=404)
 
-    slots = EquipmentSlot.objects.filter(player=player).select_related('item')
+    slots = EquipmentSlot.objects.filter(player=player).select_related('item', 'inventory_instance')
 
     result = {}
     for eq in slots:
+        inst = eq.inventory_instance
+        item = eq.item
+        
         result[eq.slot] = {
-            'slug': eq.item.slug if eq.item else None,
-            'name': eq.item.name if eq.item else None,
-            'icon': eq.item.icon if eq.item else None,
-            'rarity': eq.item.rarity if eq.item else None,
+            'slug': item.slug if item else None,
+            'name': item.name if item else None,
+            'icon': item.icon if item else None,
+            'rarity': item.rarity if item else None,
             'equip_slot': eq.slot,
-            'image_path': eq.item.image_path if eq.item else None,
-            'bonus_strength': eq.item.bonus_strength if eq.item else 0,
-            'bonus_endurance': eq.item.bonus_endurance if eq.item else 0,
-            'bonus_agility': eq.item.bonus_agility if eq.item else 0,
-            'bonus_intelligence': eq.item.bonus_intelligence if eq.item else 0,
-            'bonus_sanity': eq.item.bonus_sanity if eq.item else 0,
-            'bonus_health': eq.item.bonus_health if eq.item else 0,
-            'bonus_mana': eq.item.bonus_mana if eq.item else 0,
+            'image_path': item.image_path if item else None,
+            'bonus_strength': inst.get_effective_bonus('bonus_strength') if inst else (item.bonus_strength if item else 0),
+            'bonus_endurance': inst.get_effective_bonus('bonus_endurance') if inst else (item.bonus_endurance if item else 0),
+            'bonus_agility': inst.get_effective_bonus('bonus_agility') if inst else (item.bonus_agility if item else 0),
+            'bonus_intelligence': inst.get_effective_bonus('bonus_intelligence') if inst else (item.bonus_intelligence if item else 0),
+            'bonus_sanity': inst.get_effective_bonus('bonus_sanity') if inst else (item.bonus_sanity if item else 0),
+            'bonus_health': inst.get_effective_bonus('bonus_health') if inst else (item.bonus_health if item else 0),
+            'bonus_mana': inst.get_effective_bonus('bonus_mana') if inst else (item.bonus_mana if item else 0),
         }
 
     return Response({'equipment': result})
 
+@api_view(['POST'])
+def player_discard(request):
+    """Выбросить или разобрать предмет"""
+    item_slug = request.data.get('item_slug')
+    instance_id = request.data.get('instance_id')
+    action = request.data.get('action', 'discard') # 'discard' (выбросить) или 'sell' (разобрать)
+
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    from game.services.inventory import remove_item, remove_instance
+    
+    if instance_id:
+        # Уникальный экземпляр (экипировка)
+        instance = InventoryInstance.objects.filter(id=instance_id, player=player, is_equipped=False).first()
+        if not instance:
+            return Response({'error': 'Предмет не найден или надет'}, status=404)
+        
+        # Если разбираем, даем золото (например, 10% от цены)
+        gold_earned = 0
+        if action == 'sell':
+            gold_earned = max(1, instance.item.price // 10)
+            player.gold += gold_earned
+            player.save()
+            
+        remove_instance(instance)
+        return Response({'success': True, 'message': 'Предмет удален', 'gold_earned': gold_earned})
+        
+    elif item_slug:
+        # Стак (зелья, ресурсы)
+        try:
+            item = Item.objects.get(slug=item_slug)
+        except Item.DoesNotExist:
+            return Response({'error': 'Предмет не найден'}, status=404)
+            
+        if remove_item(player, item, 1):
+            gold_earned = 0
+            if action == 'sell':
+                gold_earned = max(1, item.price // 10)
+                player.gold += gold_earned
+                player.save()
+            return Response({'success': True, 'message': 'Предмет удален', 'gold_earned': gold_earned})
+        else:
+            return Response({'error': 'У вас нет этого предмета'}, status=400)
+            
+    return Response({'error': 'Не указан предмет'}, status=400)
 
 @api_view(['GET'])
 def location_enemies(request, slug):
@@ -1194,7 +1221,6 @@ class CompleteQuestView(APIView):
 
         quest = pq.quest
 
-
         # 🆕 Начисляем опыт через метод, который проверяет уровень
         player.add_experience(quest.reward_exp) 
         
@@ -1203,11 +1229,10 @@ class CompleteQuestView(APIView):
         player.save() # Сохраняем золото
 
         dropped_items = []
+        from game.services.inventory import add_item
 
         if quest.reward_item and quest.reward_item_qty > 0:
-            inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_item, defaults={'quantity': 0})
-            inv.quantity += quest.reward_item_qty
-            inv.save()
+            add_item(player, quest.reward_item, quest.reward_item_qty)
 
             dropped_items.append({
                 'slug': quest.reward_item.slug,
@@ -1217,9 +1242,7 @@ class CompleteQuestView(APIView):
             })
 
         if quest.reward_resource and quest.reward_resource_qty > 0:
-            inv, created = Inventory.objects.get_or_create(player=player, item=quest.reward_resource, defaults={'quantity': 0})
-            inv.quantity += quest.reward_resource_qty
-            inv.save()
+            add_item(player, quest.reward_resource, quest.reward_resource_qty)
 
             dropped_items.append({
                 'slug': quest.reward_resource.slug,
@@ -1396,19 +1419,12 @@ def craft_item(request):
             'error': 'Не хватает ресурсов: ' + ', '.join(missing_ingredients)
         }, status=400)
 
+    from game.services.inventory import remove_item
     for ing in recipe.ingredients.all():
-        inv = Inventory.objects.get(player=player, item=ing.item)
-        inv.quantity -= ing.quantity
-        if inv.quantity <= 0:
-            inv.delete()
-        else:
-            inv.save()
+        remove_item(player, ing.item, ing.quantity)
 
-    result_inv, created = Inventory.objects.get_or_create(
-        player=player, item=recipe.result_item, defaults={'quantity': 0}
-    )
-    result_inv.quantity += recipe.result_quantity
-    result_inv.save()
+    from game.services.inventory import add_item
+    add_item(player, recipe.result_item, recipe.result_quantity)
 
     player_recipe.delete()
 

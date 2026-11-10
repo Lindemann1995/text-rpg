@@ -461,6 +461,11 @@ class Item(models.Model):
         verbose_name='Макс. в стаке',
         help_text='Сколько ресурсов может лежать в одной ячейке'
     )
+    is_stackable = models.BooleanField(
+        default=True,
+        verbose_name='Стакуется',
+        help_text='False — каждый экземпляр уникален (оружие/броня). True — стакается (зелья/ресурсы).'
+    )
     scroll_unlock = models.ForeignKey(
         'self', 
         on_delete=models.SET_NULL, 
@@ -517,9 +522,77 @@ class Inventory(models.Model):
         verbose_name_plural = 'Инвентари'
         unique_together = [['player', 'item']]
         ordering = ['-acquired_at']
+        indexes = [
+            models.Index(fields=['player', 'is_equipped']),
+        ]
     
     def __str__(self):
         return f'{self.player.user.username}: {self.item.name} x{self.quantity}'
+
+class InventoryInstance(models.Model):
+    """
+    Уникальный экземпляр предмета (экипировка).
+    Каждый экземпляр имеет свои бонусы/аффиксы и может быть экипирован независимо.
+    """
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.CASCADE,
+        related_name='item_instances',
+        verbose_name='Игрок'
+    )
+    item = models.ForeignKey(
+        Item,
+        on_delete=models.CASCADE,
+        verbose_name='Предмет'
+    )
+
+    # Переопределения бонусов (0 = брать из Item, иначе — своё значение)
+    bonus_strength = models.IntegerField(default=0, verbose_name='+ Сила (экз.)')
+    bonus_agility = models.IntegerField(default=0, verbose_name='+ Ловкость (экз.)')
+    bonus_intelligence = models.IntegerField(default=0, verbose_name='+ Интеллект (экз.)')
+    bonus_endurance = models.IntegerField(default=0, verbose_name='+ Выносливость (экз.)')
+    bonus_sanity = models.IntegerField(default=0, verbose_name='+ Рассудок (экз.)')
+    bonus_health = models.IntegerField(default=0, verbose_name='+ Здоровье (экз.)')
+    bonus_mana = models.IntegerField(default=0, verbose_name='+ Мана (экз.)')
+
+    # Задел на будущее
+    affixes = models.JSONField(default=dict, blank=True, verbose_name='Аффиксы')
+    durability = models.IntegerField(null=True, blank=True, verbose_name='Прочность')
+    max_durability = models.IntegerField(null=True, blank=True, verbose_name='Макс. прочность')
+
+    is_equipped = models.BooleanField(default=False, verbose_name='Экипирован')
+    acquired_at = models.DateTimeField(auto_now_add=True, verbose_name='Получен')
+
+    class Meta:
+        verbose_name = 'Экземпляр предмета'
+        verbose_name_plural = 'Экземпляры предметов'
+        ordering = ['-acquired_at']
+        indexes = [
+            models.Index(fields=['player', 'is_equipped']),
+            models.Index(fields=['player', 'item']),
+        ]
+
+    def __str__(self):
+        eq = ' [надет]' if self.is_equipped else ''
+        return f'{self.player.user.username}: {self.item.name} (id={self.pk}){eq}'
+
+    def get_effective_bonus(self, field: str) -> int:
+        """
+        Возвращает эффективное значение бонуса:
+        если у экземпляра переопределение != 0 — берём его, иначе — из Item.
+        field: 'bonus_strength', 'bonus_agility', ...
+        """
+        own = getattr(self, field, 0)
+        if own:
+            return own
+        return getattr(self.item, field, 0)
+
+    def effective_bonuses(self) -> dict:
+        fields = [
+            'bonus_strength', 'bonus_agility', 'bonus_intelligence',
+            'bonus_endurance', 'bonus_sanity', 'bonus_health', 'bonus_mana',
+        ]
+        return {f: self.get_effective_bonus(f) for f in fields}
 
 
 class Location(models.Model):
@@ -758,6 +831,15 @@ class EquipmentSlot(models.Model):
         null=True,
         blank=True,
         verbose_name='Предмет'
+    )
+    inventory_instance = models.ForeignKey(
+        'InventoryInstance',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='equipment_slot',
+        verbose_name='Экземпляр предмета',
+        help_text='Источник правды для экипировки. item оставлен для обратной совместимости.'
     )
     equipped_at = models.DateTimeField(auto_now=True)
     

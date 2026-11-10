@@ -67,6 +67,7 @@ urlpatterns = [
     path('player/equipment/', views.player_equipment, name='player_equipment'),
     path('player/equip/', views.player_equip, name='player_equip'),
     path('player/unequip/', views.player_unequip, name='player_unequip'),
+    path('player/equip/discard/', views.player_discard, name='player_discard'),
 
     # 🆕 Квесты и NPC
     path('npc/<slug:npc_slug>/', NPCDetailView.as_view(), name='npc_detail'),
