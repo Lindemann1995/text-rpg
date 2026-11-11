@@ -56,6 +56,9 @@ urlpatterns = [
     path('player/use-potion/', views.use_potion, name='use_potion'),
     path('player/potions/', views.get_potions, name='get_potions'),
     path('shop/buy-potion/', views.buy_potion, name='buy_potion'),
+    path('vip/status/', views.vip_status, name='vip_status'),
+    path('vip/items/', views.vip_items, name='vip_items'),
+    path('vip/activate/', views.vip_activate, name='vip_activate'),
     
     # Торговцы
     path('location/<slug:location_slug>/traders/', views.traders_list, name='traders_list'),

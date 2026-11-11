@@ -3,6 +3,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from .models import Player
 from social.models import GlobalChatMessage
+from game.services.vip import get_vip_color  # 🆕 Импорт функции цвета
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -21,15 +22,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not message or not username:
             return
 
-        # 1. Получаем роль игрока из БД
-        role = await self.get_user_role(username)
+        # 1. Получаем роль и цвет игрока из БД
+        role, color = await self.get_user_data(username)
 
-         # 2. 🆕 СОХРАНЯЕМ СООБЩЕНИЕ В БД
-        saved = await self.save_message(username, message)
+        # 2. СОХРАНЯЕМ СООБЩЕНИЕ В БД (с цветом)
+        saved = await self.save_message(username, message, color)
         if not saved:
             return
 
-        # 3. Отправляем сообщение всем в группу (с ID и временем)
+        # 3. Отправляем сообщение всем в группу
         await self.channel_layer.group_send(
             self.room_group_name,
             {
@@ -38,7 +39,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 'message': message,
                 'username': username,
                 'role': role,
-                'created_at': saved.created_at.isoformat(),  # 🆕 UTC ISO
+                'color': color,  # 🆕 Передаем цвет
+                'created_at': saved.created_at.isoformat(),
             }
         )
 
@@ -48,23 +50,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message': event['message'],
             'username': event['username'],
             'role': event['role'],
-            'created_at': event['created_at'],  # 🆕
+            'color': event.get('color', ''),  # 🆕 Отдаем цвет клиенту
+            'created_at': event['created_at'],
         }))
 
     @database_sync_to_async
-    def get_user_role(self, username):
+    def get_user_data(self, username):
         try:
             player = Player.objects.get(user__username=username)
-            return player.role
+            # 🆕 Получаем цвет через сервис VIP
+            return player.role, get_vip_color(player)
         except Player.DoesNotExist:
-            return 'player'
+            return 'player', ''
 
-        # 🆕 НОВЫЙ МЕТОД ДЛЯ СОХРАНЕНИЯ — возвращает сохранённое сообщение
     @database_sync_to_async
-    def save_message(self, username, message_text):
+    def save_message(self, username, message_text, author_color):
         try:
             player = Player.objects.get(user__username=username)
-            return GlobalChatMessage.objects.create(player=player, message=message_text)
+            return GlobalChatMessage.objects.create(
+                player=player, 
+                message=message_text,
+                author_color=author_color  # 🆕 Сохраняем цвет
+            )
         except Player.DoesNotExist:
             print(f"Ошибка: игрок {username} не найден при сохранении сообщения")
             return None

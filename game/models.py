@@ -861,10 +861,24 @@ class EnemyLoot(models.Model):
         related_name='loot_table',
         verbose_name='Враг'
     )
+    
+    # 🆕 Сделали необязательным, чтобы можно было выбрать VIP вместо предмета
     item = models.ForeignKey(
         Item, 
         on_delete=models.CASCADE, 
+        null=True, 
+        blank=True,
         verbose_name='Выпадающий предмет'
+    )
+    
+    # 🆕 НОВОЕ ПОЛЕ ДЛЯ VIP
+    vip_template = models.ForeignKey(
+        'VipItemTemplate', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        verbose_name='VIP-предмет',
+        help_text='Выбери VIP-статус, если хочешь, чтобы падал он, а не обычный предмет.'
     )
     
     min_enemy_level = models.IntegerField(
@@ -887,11 +901,13 @@ class EnemyLoot(models.Model):
     class Meta:
         verbose_name = 'Лут с врага'
         verbose_name_plural = 'Таблицы лута'
-        unique_together = [['enemy', 'item', 'min_enemy_level', 'max_enemy_level']]
+        # unique_together лучше убрать или изменить, так как item теперь может быть None
         ordering = ['enemy', 'min_enemy_level']
 
     def __str__(self):
-        return f'{self.enemy.name} (Ур. {self.min_enemy_level}-{self.max_enemy_level}) -> {self.item.name} ({self.chance}%)'
+        # Красиво отображаем в админке, что именно падает
+        drop_name = self.item.name if self.item else (self.vip_template.name if self.vip_template else 'Пусто')
+        return f'{self.enemy.name} (Ур. {self.min_enemy_level}-{self.max_enemy_level}) -> {drop_name} ({self.chance}%)'
 
 
 # ==========================================
@@ -989,7 +1005,6 @@ class Quest(models.Model):
     reward_item_qty = models.IntegerField(default=1, verbose_name='Количество предметов')
     reward_resource = models.ForeignKey('Item', on_delete=models.SET_NULL, null=True, blank=True, related_name='quest_reward_resources', verbose_name='Награда: Ресурс')
     reward_resource_qty = models.IntegerField(default=1, verbose_name='Количество ресурсов')
-    reward_vip_days = models.IntegerField(default=0, verbose_name='Награда: VIP (дней)', help_text='0 = без VIP. 1 = на 1 день и т.д.')
     
     class Meta:
         verbose_name = 'Квест'
@@ -1238,3 +1253,243 @@ class PlayerNotification(models.Model):
 
     def __str__(self):
         return f'{self.player.user.username} - {self.title}'
+
+# ==========================================
+# 💎 VIP СИСТЕМА («ТЕНЬ ПЛАТИНУМ»)
+# ==========================================
+
+class VipStatus(models.Model):
+    """Справочник VIP-статусов (например, «Тень Платинум»)."""
+    name = models.CharField(max_length=100, unique=True, verbose_name='Название')
+    slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
+    color_hex = models.CharField(
+        max_length=7, default='#B9A7FF',
+        verbose_name='Цвет в чате',
+        help_text='HEX, например #B9A7FF'
+    )
+    description = models.TextField(blank=True, verbose_name='Описание')
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
+
+    class Meta:
+        verbose_name = 'VIP-статус'
+        verbose_name_plural = 'VIP-статусы'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class VipBonus(models.Model):
+    """Бонус, привязанный к VIP-статусу. Создаётся в админке."""
+    BONUS_TYPES = [
+        ('experience_multiplier', 'Множитель опыта'),
+        ('gold_multiplier', 'Множитель золота'),
+        ('drop_chance_multiplier', 'Множитель шанса дропа'),
+        ('regen_multiplier', 'Множитель регенерации HP'),
+        ('chat_color', 'Цвет в чате (из VipStatus)'),
+    ]
+
+    vip_status = models.ForeignKey(
+        VipStatus, on_delete=models.CASCADE,
+        related_name='bonuses', verbose_name='VIP-статус'
+    )
+    bonus_type = models.CharField(
+        max_length=40, choices=BONUS_TYPES, verbose_name='Тип бонуса'
+    )
+    value = models.FloatField(
+        default=1.0, verbose_name='Значение',
+        help_text='Для множителей: 2.0 = x2. Для chat_color игнорируется.'
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+    description = models.CharField(max_length=255, blank=True, verbose_name='Описание')
+
+    class Meta:
+        verbose_name = 'Бонус VIP'
+        verbose_name_plural = 'Бонусы VIP'
+        unique_together = [['vip_status', 'bonus_type']]
+        ordering = ['vip_status', 'bonus_type']
+
+    def __str__(self):
+        return f'{self.vip_status.name}: {self.get_bonus_type_display()} = {self.value}'
+
+
+class VipItemTemplate(models.Model):
+    """Шаблон VIP-предмета-активатора."""
+    RARITIES = [
+        ('common', 'Обычный'),
+        ('uncommon', 'Необычный'),
+        ('rare', 'Редкий'),
+        ('epic', 'Эпический'),
+        ('legendary', 'Легендарный'),
+    ]
+
+    vip_status = models.ForeignKey(
+        VipStatus, on_delete=models.CASCADE,
+        related_name='item_templates', verbose_name='VIP-статус'
+    )
+    days = models.PositiveIntegerField(
+        verbose_name='Дней VIP',
+        help_text='Сколько дней даёт активация. 1, 2, 7, 30 — любое.'
+    )
+    name = models.CharField(max_length=100, verbose_name='Название предмета')
+    slug = models.SlugField(max_length=100, unique=True, verbose_name='Slug')
+    description = models.TextField(blank=True, verbose_name='Описание')
+    icon = models.CharField(max_length=100, blank=True, verbose_name='Иконка (emoji)')
+    image_path = models.CharField(
+        max_length=200, blank=True, verbose_name='Путь к картинке',
+        help_text='Например: vip/platinum_7d.png (без assets/images/)'
+    )
+    rarity = models.CharField(
+        max_length=20, choices=RARITIES, default='legendary', verbose_name='Редкость'
+    )
+    price = models.IntegerField(
+        default=0, null=True, blank=True, verbose_name='Цена (для доната)',
+        help_text='Задел на будущее. 0 = бесплатно/не продаётся.'
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
+
+    class Meta:
+        verbose_name = 'VIP-предмет (шаблон)'
+        verbose_name_plural = 'VIP-предметы (шаблоны)'
+        ordering = ['vip_status', 'days']
+
+    def __str__(self):
+        return f'{self.name} ({self.days} дн.)'
+
+
+class PlayerVipItem(models.Model):
+    """Экземпляр VIP-активатора в инвентаре игрока."""
+    SOURCES = [
+        ('quest', 'Квест'),
+        ('admin', 'Админка'),
+        ('boss', 'Босс'),
+        ('donate', 'Донат'),
+        ('promo', 'Промокод'),
+        ('other', 'Другое'),
+    ]
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE,
+        related_name='vip_items', verbose_name='Игрок'
+    )
+    template = models.ForeignKey(
+        VipItemTemplate, on_delete=models.CASCADE,
+        related_name='player_items', verbose_name='Шаблон'
+    )
+    quantity = models.PositiveIntegerField(default=1, verbose_name='Количество')
+    obtained_at = models.DateTimeField(auto_now_add=True, verbose_name='Получен')
+    source = models.CharField(
+        max_length=20, choices=SOURCES, default='other', verbose_name='Источник'
+    )
+    source_ref = models.CharField(
+        max_length=100, blank=True, verbose_name='Ссылка на источник'
+    )
+
+    class Meta:
+        verbose_name = 'VIP-предмет в инвентаре'
+        verbose_name_plural = 'VIP-предметы в инвентаре'
+        ordering = ['-obtained_at']
+        indexes = [models.Index(fields=['player', 'template'])]
+
+    def __str__(self):
+        return f'{self.player.user.username}: {self.template.name} x{self.quantity}'
+
+
+class PlayerVip(models.Model):
+    """Активный/исторический VIP-статус игрока."""
+    SOURCES = PlayerVipItem.SOURCES
+
+    player = models.ForeignKey(
+        Player, on_delete=models.CASCADE,
+        related_name='vip_history', verbose_name='Игрок'
+    )
+    vip_status = models.ForeignKey(
+        VipStatus, on_delete=models.CASCADE,
+        related_name='activations', verbose_name='VIP-статус'
+    )
+    activated_at = models.DateTimeField(default=timezone.now, verbose_name='Активирован')
+    expires_at = models.DateTimeField(verbose_name='Истекает')
+    source = models.CharField(
+        max_length=20, choices=SOURCES, default='other', verbose_name='Источник'
+    )
+    source_ref = models.CharField(max_length=100, blank=True, verbose_name='Ссылка на источник')
+
+    class Meta:
+        verbose_name = 'VIP игрока'
+        verbose_name_plural = 'VIP игроков'
+        ordering = ['-expires_at']
+        indexes = [models.Index(fields=['player', 'expires_at'])]
+
+    def __str__(self):
+        status = 'активен' if self.is_active else 'истёк'
+        return f'{self.player.user.username}: {self.vip_status.name} до {self.expires_at:%d.%m.%Y %H:%M} ({status})'
+
+    @property
+    def is_active(self):
+        return self.expires_at > timezone.now()
+
+    def remaining(self):
+        delta = self.expires_at - timezone.now()
+        total = int(delta.total_seconds())
+        if total <= 0:
+            return {'days': 0, 'hours': 0, 'minutes': 0, 'total_seconds': 0}
+        return {
+            'days': total // 86400,
+            'hours': (total % 86400) // 3600,
+            'minutes': (total % 3600) // 60,
+            'total_seconds': total,
+        }
+
+
+# ==========================================
+# 🎁 GENERIC REWARD-СЛОЙ (Вариант Б)
+# ==========================================
+
+class RewardEntry(models.Model):
+    """Универсальная запись награды."""
+    REWARD_TYPES = [
+        ('gold', 'Золото'),
+        ('experience', 'Опыт'),
+        ('item', 'Предмет'),
+        ('vip_item', 'VIP-предмет'),
+    ]
+
+    reward_type = models.CharField(
+        max_length=20, choices=REWARD_TYPES, verbose_name='Тип награды'
+    )
+    amount = models.IntegerField(
+        default=0, verbose_name='Количество'
+    )
+    chance = models.IntegerField(
+        default=100, 
+        verbose_name='Шанс выпадения (%)',
+        help_text='От 1 до 100. 100 = падает всегда.'
+    )
+    item = models.ForeignKey(
+        'Item', on_delete=models.SET_NULL, null=True, blank=True,
+        verbose_name='Предмет (для item)'
+    )
+    vip_template = models.ForeignKey(
+        VipItemTemplate, on_delete=models.SET_NULL, null=True, blank=True,
+        verbose_name='VIP-шаблон (для vip_item)'
+    )
+
+    quest = models.ForeignKey(
+        'Quest', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='reward_entries', verbose_name='Квест'
+    )
+    enemy = models.ForeignKey(
+        'Enemy', on_delete=models.CASCADE, null=True, blank=True,
+        related_name='reward_entries', verbose_name='Враг (босс)'
+    )
+
+    class Meta:
+        verbose_name = 'Запись награды'
+        verbose_name_plural = 'Записи наград'
+        ordering = ['id']
+
+    def __str__(self):
+        owner = self.quest or self.enemy or '—'
+        return f'{owner}: {self.get_reward_type_display()} x{self.amount}'

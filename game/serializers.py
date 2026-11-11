@@ -160,7 +160,6 @@ class QuestSerializer(serializers.ModelSerializer):
             'reward_exp', 'reward_gold', 
             'reward_item', 'reward_item_qty', 'reward_item_name', 'reward_item_slug', 'reward_item_rarity', 'reward_item_image',
             'reward_resource', 'reward_resource_qty', 'reward_resource_name', 'reward_resource_slug', 'reward_resource_rarity', 'reward_resource_image',
-            'reward_vip_days',
             'objectives'
         ]
 

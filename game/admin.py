@@ -9,6 +9,7 @@ from .models import (
     Location, Enemy, Combat, Trader, EquipmentSlot, EnemyLoot, 
     NPC, DialogueOption, QuestLine, Quest, QuestObjective, PlayerQuest, 
     Recipe, RecipeIngredient, PlayerRecipe, CombatSettings, PlayerReport, PlayerNotification, 
+    VipStatus, VipBonus, VipItemTemplate, PlayerVipItem, PlayerVip, RewardEntry, 
 )
 from guilds.models import Guild
 
@@ -20,7 +21,6 @@ class CustomAdminSite(AdminSite):
     index_template = 'admin/index.html'
 
     def each_context(self, request):
-        # Добавляем онлайн на все страницы
         context = super().each_context(request)
         online_threshold = timezone.now() - timedelta(minutes=5)
         context['online_players'] = Player.objects.filter(last_seen__gte=online_threshold).count()
@@ -207,11 +207,13 @@ class EnemyAdmin(admin.ModelAdmin):
         }),
     )
 
+
 @admin.register(Combat, site=custom_admin_site)
 class CombatAdmin(admin.ModelAdmin):
     list_display = ['player', 'enemy', 'status', 'turn', 'created_at']
     list_filter = ['status', 'enemy']
     search_fields = ['player__user__username', 'enemy__name']
+
 
 @admin.register(Trader, site=custom_admin_site)
 class TraderAdmin(admin.ModelAdmin):
@@ -228,11 +230,49 @@ class EquipmentSlotAdmin(admin.ModelAdmin):
     list_filter = ['slot']
     search_fields = ['player__user__username', 'item__name']
 
+
 @admin.register(EnemyLoot, site=custom_admin_site)
 class EnemyLootAdmin(admin.ModelAdmin):
     list_display = ['enemy', 'item', 'min_enemy_level', 'max_enemy_level', 'chance', 'quantity_min', 'quantity_max']
     list_filter = ['enemy', 'item__rarity', 'min_enemy_level']
     search_fields = ['enemy__name', 'item__name']
+
+
+# ==========================================
+# 💎 VIP СИСТЕМА (АДМИНКА)
+# ==========================================
+
+class VipBonusInline(admin.TabularInline):
+    model = VipBonus
+    extra = 1
+
+@admin.register(VipStatus, site=custom_admin_site)
+class VipStatusAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'color_hex', 'is_active']
+    inlines = [VipBonusInline]
+
+@admin.register(VipItemTemplate, site=custom_admin_site)
+class VipItemTemplateAdmin(admin.ModelAdmin):
+    list_display = ['name', 'vip_status', 'days', 'is_active', 'image_path']
+    list_filter = ['vip_status', 'is_active']
+    prepopulated_fields = {'slug': ('name',)}
+    search_fields = ['name', 'slug'] 
+
+class RewardEntryInline(admin.TabularInline):
+    model = RewardEntry
+    extra = 1
+    autocomplete_fields = ['item', 'vip_template']
+
+@admin.register(PlayerVipItem, site=custom_admin_site)
+class PlayerVipItemAdmin(admin.ModelAdmin):
+    list_display = ['player', 'template', 'quantity', 'source', 'obtained_at']
+    search_fields = ['player__user__username', 'template__name']
+
+@admin.register(PlayerVip, site=custom_admin_site)
+class PlayerVipAdmin(admin.ModelAdmin):
+    list_display = ['player', 'vip_status', 'expires_at', 'source', 'is_active']
+    list_filter = ['vip_status']
+    search_fields = ['player__user__username']
 
 
 # ==========================================
@@ -270,13 +310,13 @@ class QuestAdmin(admin.ModelAdmin):
     list_filter = ['quest_line', 'giver_npc', 'required_level']
     search_fields = ['title', 'slug']
     prepopulated_fields = {'slug': ('title',)}
-    inlines = [QuestObjectiveInline]
+    inlines = [QuestObjectiveInline, RewardEntryInline] # 🆕 Добавлен RewardEntryInline
     fieldsets = (
         ('Основное', {
             'fields': ('title', 'slug', 'description', 'giver_npc', 'turn_in_npc', 'required_level', 'is_repeatable')
         }),
         ('Награды', {
-            'fields': ('reward_exp', 'reward_gold', 'reward_item', 'reward_item_qty', 'reward_resource', 'reward_resource_qty', 'reward_vip_days')
+            'fields': ('reward_exp', 'reward_gold', 'reward_item', 'reward_item_qty', 'reward_resource', 'reward_resource_qty')
         }),
     )
 
@@ -331,6 +371,7 @@ class CombatSettingsAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
+
 @admin.register(PlayerReport, site=custom_admin_site)
 class PlayerReportAdmin(admin.ModelAdmin):
     list_display = ('created_at', 'reporter', 'target', 'reason', 'is_resolved')
@@ -338,43 +379,31 @@ class PlayerReportAdmin(admin.ModelAdmin):
     search_fields = ('reporter__user__username', 'target__user__username', 'comment')
     readonly_fields = ('reporter', 'target', 'reason', 'comment', 'created_at')
 
-    # Поле "Ответ модератора" должно быть редактируемым, чтобы мы могли вписать текст
     fields = ('reporter', 'target', 'reason', 'comment', 'moderator_comment', 'is_resolved', 'created_at')
 
-    # 🆕 Перехватываем сохранение, чтобы отправить уведомление, если вписан ответ
     def save_model(self, request, obj, form, change):
-        # Вызываем стандартное сохранение
         super().save_model(request, obj, form, change)
 
-        # Если модератор вписал ответ и поставил галочку "Обработана", отправляем уведомление
         if obj.moderator_comment and obj.is_resolved:
-            # Уведомление для того, на кого жаловались
             PlayerNotification.objects.create(
                 player=obj.target,
                 title="Сообщение от модератора",
                 message=f"По вашей жалобе: {obj.moderator_comment}"
             )
-            # Уведомление для того, кто жаловался
             PlayerNotification.objects.create(
                 player=obj.reporter,
                 title="Ответ по вашей жалобе",
                 message=f"Ваша жалоба на игрока {obj.target.user.username} рассмотрена. Ответ: {obj.moderator_comment}"
             )
-            
-            # Чтобы не отправлять уведомления повторно при каждом редактировании,
-            # можно временно обнулить комментарий (или добавить флаг, но для простоты пока так)
-            # Но лучше просто напоминать админу не сохранять дважды.
 
     actions = ['ban_and_notify', 'mute_and_notify', 'dismiss_and_notify']
 
     def _send_notifications(self, report, action_text, reason):
-        # 1. Уведомление нарушителю
         PlayerNotification.objects.create(
             player=report.target,
             title="Решение по жалобе",
             message=f"На вас поступила жалоба. Результат проверки: {action_text}. Комментарий: {reason}"
         )
-        # 2. Уведомление тому, кто пожаловался
         PlayerNotification.objects.create(
             player=report.reporter,
             title="Ваша жалоба рассмотрена",
@@ -390,7 +419,6 @@ class PlayerReportAdmin(admin.ModelAdmin):
                 report.is_resolved = True
                 report.moderator_comment = "Забанен"
                 report.save()
-                
                 self._send_notifications(report, "Игрок забанен", "Жалоба одобрена")
         self.message_user(request, f"Забанено и отправлено уведомлений: {queryset.count()}")
     ban_and_notify.short_description = "🔨 Забанить и уведомить"
@@ -403,7 +431,6 @@ class PlayerReportAdmin(admin.ModelAdmin):
                 report.is_resolved = True
                 report.moderator_comment = "Замучен"
                 report.save()
-                
                 self._send_notifications(report, "Игрок замучен на 24 часа", "Жалоба одобрена")
         self.message_user(request, f"Замучено: {queryset.count()}")
     mute_and_notify.short_description = "🔇 Замутить и уведомить"
@@ -414,7 +441,6 @@ class PlayerReportAdmin(admin.ModelAdmin):
                 report.is_resolved = True
                 report.moderator_comment = "Нарушений не найдено"
                 report.save()
-                
                 self._send_notifications(report, "Нарушений не найдено", "Жалоба отклонена")
         self.message_user(request, f"Жалоб отклонено: {queryset.count()}")
     dismiss_and_notify.short_description = "❌ Отклонить и уведомить"

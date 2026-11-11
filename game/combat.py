@@ -174,7 +174,10 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
     try:
         # Применяем баффы гильдии (опыт и золото)
         from guilds.services import get_guild_bonuses
+        from game.services.vip import get_active_vip_bonuses  # 🆕 ИМПОРТ VIP
+        
         bonuses = get_guild_bonuses(player)
+        vip_bonuses = get_active_vip_bonuses(player) # 🆕 VIP БОНУСЫ
 
         # 1. Награды за уровень
         level_diff = player.level - enemy.level
@@ -189,9 +192,12 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
             xp_reward = int(xp_reward * settings.level_diff_bonus_multiplier)
             gold_reward = int(gold_reward * settings.level_diff_bonus_multiplier)
 
-        # ПРИМЕНЯЕМ БАФФЫ
-        xp_reward = int(xp_reward * bonuses['xp_multiplier'])
-        gold_reward = int(gold_reward * bonuses['gold_multiplier'])
+        # ПРИМЕНЯЕМ БАФФЫ ГИЛЬДИИ И VIP
+        xp_mult = bonuses['xp_multiplier'] * vip_bonuses.get('experience_multiplier', 1.0)
+        gold_mult = bonuses['gold_multiplier'] * vip_bonuses.get('gold_multiplier', 1.0)
+        
+        xp_reward = int(xp_reward * xp_mult)
+        gold_reward = int(gold_reward * gold_mult)
 
         # Сохраняем для возврата
         real_xp = xp_reward
@@ -219,30 +225,49 @@ def _apply_rewards(player: Player, enemy: Enemy) -> tuple:
                     penalty = (loc_level_diff - 5) * 10
                     drop_chance = max(0, drop_chance - penalty)
 
-            # ПРИМЕНЯЕМ БАФФ ЛУТА (Кузница)
-            drop_chance = int(drop_chance * bonuses['loot_multiplier'])
+            drop_mult = bonuses.get('loot_multiplier', 1.0) * vip_bonuses.get('drop_chance_multiplier', 1.0)
+            drop_chance = int(drop_chance * drop_mult)
 
             roll = random.randint(1, 100)
             if roll <= drop_chance:
                 qty = random.randint(loot.quantity_min, loot.quantity_max)
                 
-                # 🆕 ИСПОЛЬЗУЕМ СЕРВИС
-                from game.services.inventory import add_item
-                add_item(player, loot.item, qty)
-                
-                dropped_items.append({
-                    'slug': loot.item.slug,
-                    'name': loot.item.name,
-                    'quantity': qty,
-                    'rarity': loot.item.rarity,
-                    'item_type': loot.item.item_type, 
-                    'image_path': loot.item.image_path,
-                    'bonus_strength': loot.item.bonus_strength,
-                    'bonus_agility': loot.item.bonus_agility,
-                    'bonus_intelligence': loot.item.bonus_intelligence,
-                    'bonus_endurance': loot.item.bonus_endurance,
-                    'bonus_health': loot.item.bonus_health,
-                })
+                # 🆕 ВЫПАЛ VIP-ПРЕДМЕТ
+                if loot.vip_template:
+                    from game.services.vip import grant_vip_item
+                    grant_vip_item(
+                        player, 
+                        loot.vip_template, 
+                        quantity=qty, 
+                        source='boss' if enemy.enemy_type == 'boss' else 'other', 
+                        source_ref=enemy.slug
+                    )
+                    dropped_items.append({
+                        'slug': loot.vip_template.slug,
+                        'name': loot.vip_template.name,
+                        'quantity': qty,
+                        'rarity': loot.vip_template.rarity,
+                        'image_path': loot.vip_template.image_path,
+                        'is_vip': True
+                    })
+                # 🆕 ВЫПАЛ ОБЫЧНЫЙ ПРЕДМЕТ (ТОЛЬКО ЕСЛИ ОН ЕСТЬ)
+                elif loot.item:
+                    from game.services.inventory import add_item
+                    add_item(player, loot.item, qty)
+                    
+                    dropped_items.append({
+                        'slug': loot.item.slug,
+                        'name': loot.item.name,
+                        'quantity': qty,
+                        'rarity': loot.item.rarity,
+                        'item_type': loot.item.item_type, 
+                        'image_path': loot.item.image_path,
+                        'bonus_strength': loot.item.bonus_strength,
+                        'bonus_agility': loot.item.bonus_agility,
+                        'bonus_intelligence': loot.item.bonus_intelligence,
+                        'bonus_endurance': loot.item.bonus_endurance,
+                        'bonus_health': loot.item.bonus_health,
+                    })
         
         # 4. 🆕 Начисление опыта и проверка повышения уровня
         leveled_up = player.add_experience(xp_reward)

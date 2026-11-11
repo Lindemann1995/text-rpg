@@ -62,12 +62,20 @@ class GlobalChatMessage(models.Model):
         related_name='global_messages', verbose_name='Игрок'
     )
     message = models.TextField(verbose_name='Сообщение')
+    
+    # 🆕 ДОБАВЛЯЕМ ЭТУ СТРОКУ:
+    author_color = models.CharField(
+        max_length=7, blank=True, default='',
+        verbose_name='Цвет автора (денормализовано)',
+        help_text='HEX из VIP-статуса на момент отправки. Пусто = дефолт.'
+    )
+
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Отправлено')
 
     class Meta:
         verbose_name = 'Сообщение глобального чата'
         verbose_name_plural = 'Сообщения глобального чата'
-        ordering = ['created_at'] # Сортируем от старых к новым
+        ordering = ['created_at']
 
     def __str__(self):
         return f'{self.player.user.username}: {self.message[:20]}'

@@ -445,12 +445,23 @@ def get_locations(request):
             loot_list = []
             for loot in e.loot_table.all():
                 if loot.chance > 0:
-                    loot_list.append({
-                        'slug': loot.item.slug,
-                        'name': loot.item.name,
-                        'image_path': loot.item.image_path,
-                        'rarity': loot.item.rarity,
-                    })
+                    # 🆕 ПРОВЕРКА: Если выпадает обычный предмет
+                    if loot.item:
+                        loot_list.append({
+                            'slug': loot.item.slug,
+                            'name': loot.item.name,
+                            'image_path': loot.item.image_path,
+                            'rarity': loot.item.rarity,
+                        })
+                    # 🆕 ПРОВЕРКА: Если выпадает VIP-предмет
+                    elif loot.vip_template:
+                        loot_list.append({
+                            'slug': loot.vip_template.slug,
+                            'name': loot.vip_template.name,
+                            'image_path': loot.vip_template.image_path,
+                            'rarity': loot.vip_template.rarity,
+                            'is_vip': True,
+                        })
 
             level_diff = player.level - e.level
             xp_reward = e.xp_reward
@@ -1220,20 +1231,29 @@ class CompleteQuestView(APIView):
             return Response({'error': 'Квест еще не выполнен'}, status=400)
 
         quest = pq.quest
-
-        # 🆕 Начисляем опыт через метод, который проверяет уровень
-        player.add_experience(quest.reward_exp) 
         
-        # 🆕 Опыт начислен, теперь просто добавляем золото
-        player.gold += quest.reward_gold
-        player.save() # Сохраняем золото
+        # 🆕 Подключаем VIP-сервис
+        from game.services.vip import get_active_vip_bonuses, grant_vip_item
+        
+        # Получаем множители от VIP
+        vip_bonuses = get_active_vip_bonuses(player)
+        xp_mult = vip_bonuses.get('experience_multiplier', 1.0)
+        gold_mult = vip_bonuses.get('gold_multiplier', 1.0)
 
+        # 🆕 Начисляем опыт с учетом VIP
+        final_exp = int(quest.reward_exp * xp_mult)
+        player.add_experience(final_exp) 
+        
+        # 🆕 Начисляем золото с учетом VIP
+        final_gold = int(quest.reward_gold * gold_mult)
+        player.gold += final_gold
+        
         dropped_items = []
         from game.services.inventory import add_item
 
+        # Стандартная выдача предмета
         if quest.reward_item and quest.reward_item_qty > 0:
             add_item(player, quest.reward_item, quest.reward_item_qty)
-
             dropped_items.append({
                 'slug': quest.reward_item.slug,
                 'name': quest.reward_item.name,
@@ -1241,15 +1261,47 @@ class CompleteQuestView(APIView):
                 'rarity': quest.reward_item.rarity,
             })
 
+        # Стандартная выдача ресурса
         if quest.reward_resource and quest.reward_resource_qty > 0:
             add_item(player, quest.reward_resource, quest.reward_resource_qty)
-
             dropped_items.append({
                 'slug': quest.reward_resource.slug,
                 'name': quest.reward_resource.name,
                 'quantity': quest.reward_resource_qty,
                 'rarity': quest.reward_resource.rarity,
             })
+
+        # 🆕 ВЫДАЧА ДОПОЛНИТЕЛЬНЫХ НАГРАД ИЗ RewardEntry (включая VIP)
+        for reward in quest.reward_entries.all():
+            if reward.reward_type == 'vip_item' and reward.vip_template:
+                grant_vip_item(
+                    player, 
+                    reward.vip_template, 
+                    quantity=reward.amount, 
+                    source='quest', 
+                    source_ref=quest.slug
+                )
+                # Добавляем VIP в список лута, чтобы Flutter показал красивую плашку
+                dropped_items.append({
+                    'slug': reward.vip_template.slug,
+                    'name': reward.vip_template.name,
+                    'quantity': reward.amount,
+                    'rarity': reward.vip_template.rarity,
+                    'image_path': reward.vip_template.image_path,
+                    'is_vip': True  # 🆕 Флаг для фронтенда
+                })
+            
+            # Если захочешь выдавать обычные предметы/золото через RewardEntry (Вариант Б),
+            # можно добавить обработку 'item', 'gold', 'experience' здесь.
+            elif reward.reward_type == 'item' and reward.item:
+                add_item(player, reward.item, reward.amount)
+                dropped_items.append({
+                    'slug': reward.item.slug,
+                    'name': reward.item.name,
+                    'quantity': reward.amount,
+                    'rarity': reward.item.rarity,
+                    'image_path': reward.item.image_path,
+                })
 
         player.save()
 
@@ -1260,8 +1312,8 @@ class CompleteQuestView(APIView):
         return Response({
             'success': True,
             'message': 'Квест сдан!',
-            'exp': quest.reward_exp,
-            'gold': quest.reward_gold,
+            'exp': final_exp,      # Возвращаем реальное (увеличенное) значение
+            'gold': final_gold,    # Возвращаем реальное (увеличенное) значение
             'dropped_items': dropped_items
         })
 
@@ -1724,6 +1776,7 @@ def get_chat_history(request):
             'username': msg.player.user.username,
             'message': msg.message,
             'role': msg.player.role,
+            'color': msg.author_color,
             'time': local_dt.strftime('%H:%M'),
             'created_at': msg.created_at.isoformat(),  # 🆕 для клиента (ISO 8601 UTC)
         })
@@ -1770,3 +1823,80 @@ def delete_account(request):
         'success': True, 
         'message': 'Аккаунт успешно удален. Все персональные данные анонимизированы.'
     })
+
+# ==========================================
+# 💎 VIP API
+# ==========================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def vip_status(request):
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    from game.services.vip import get_active_vip, get_active_vip_bonuses
+    vip = get_active_vip(player)
+    
+    if vip:
+        return Response({
+            'active': True,
+            'vip_name': vip.vip_status.name,
+            'color_hex': vip.vip_status.color_hex,
+            'expires_at': vip.expires_at.isoformat(),
+            'remaining': vip.remaining(),
+            'bonuses': get_active_vip_bonuses(player)
+        })
+    return Response({'active': False})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def vip_items(request):
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    # Импортируем тут, чтобы не было циклического импорта, если что
+    from .models import PlayerVipItem
+    
+    items = PlayerVipItem.objects.filter(player=player).select_related('template', 'template__vip_status')
+    
+    result = []
+    for item in items:
+        result.append({
+            'id': item.id,
+            'name': item.template.name,
+            'days': item.template.days,
+            'quantity': item.quantity,
+            'image_path': item.template.image_path,
+            'rarity': item.template.rarity,
+            'vip_name': item.template.vip_status.name,
+        })
+    return Response({'vip_items': result})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def vip_activate(request):
+    try:
+        player = request.user.player
+    except Player.DoesNotExist:
+        return Response({'error': 'Профиль не найден'}, status=404)
+
+    item_id = request.data.get('player_vip_item_id')
+    if not item_id:
+        return Response({'error': 'Не указан player_vip_item_id'}, status=400)
+
+    from game.services.vip import activate_vip_item, VipActivationError
+    try:
+        vip = activate_vip_item(player, item_id)
+        return Response({
+            'success': True, 
+            'message': 'VIP активирован!', 
+            'expires_at': vip.expires_at.isoformat()
+        })
+    except VipActivationError as e:
+        return Response({'error': str(e)}, status=400)
